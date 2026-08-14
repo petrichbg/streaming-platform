@@ -39,6 +39,7 @@ try {
   $token = $registered.Body.accessToken
   Assert-Status 'new access token works' (Invoke-TestRequest GET '/auth/me' $null $token) 200
   Assert-Status 'non-admin cannot scan library' (Invoke-TestRequest POST '/media/scan' @{} $token) 403
+  Assert-Status 'non-admin cannot list users' (Invoke-TestRequest GET '/auth/users' $null $token) 403
 
   $profile = Invoke-TestRequest POST '/profiles' @{ name = 'Integration'; isKid = $false } $token
   Assert-Status 'create profile' $profile 201
@@ -62,7 +63,11 @@ try {
   Assert-Status 'change password' (Invoke-TestRequest POST '/auth/change-password' @{ currentPassword = $password; newPassword = $newPassword } $token) 201
   Assert-Status 'old account token is revoked' (Invoke-TestRequest GET '/auth/me' $null $token) 401
   Assert-Status 'old profile token is revoked' (Invoke-TestRequest GET '/titles' $null $profileToken) 401
-  Assert-Status 'new password logs in' (Invoke-TestRequest POST '/auth/login' @{ email = $email; password = $newPassword }) 201
+  $newLogin = Invoke-TestRequest POST '/auth/login' @{ email = $email; password = $newPassword }
+  Assert-Status 'new password logs in' $newLogin 201
+  $newToken = $newLogin.Body.accessToken
+  Assert-Status 'revoke all own sessions' (Invoke-TestRequest POST '/auth/revoke-sessions' @{} $newToken) 201
+  Assert-Status 'revoked token no longer works' (Invoke-TestRequest GET '/auth/me' $null $newToken) 401
   Write-Output "Integration suite passed: $passed checks"
 } finally {
   $rootEnv = Join-Path $PSScriptRoot '..\.env'

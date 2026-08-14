@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,6 +71,47 @@ export class AuthService {
         sessionVersion: { increment: 1 },
       },
     });
+  }
+
+  listUsers() {
+    return this.prisma.user.findMany({
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        email: true,
+        isAdmin: true,
+        createdAt: true,
+        sessionVersion: true,
+        _count: { select: { profiles: true } },
+      },
+    });
+  }
+
+  async updateUserRole(actorId: string, userId: string, isAdmin: boolean) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (actorId === userId && !isAdmin) {
+      throw new BadRequestException('You cannot remove your own administrator role');
+    }
+    if (user.isAdmin && !isAdmin) {
+      const adminCount = await this.prisma.user.count({ where: { isAdmin: true } });
+      if (adminCount <= 1) throw new ConflictException('The last administrator cannot be demoted');
+    }
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isAdmin, sessionVersion: { increment: 1 } },
+      select: { id: true, email: true, isAdmin: true },
+    });
+  }
+
+  async revokeSessions(userId: string): Promise<{ revoked: true }> {
+    const result = await this.prisma.user.updateMany({
+      where: { id: userId },
+      data: { sessionVersion: { increment: 1 } },
+    });
+    if (result.count === 0) throw new NotFoundException('User not found');
+    return { revoked: true };
   }
 
   private issueToken(user: UserRecord): AuthResult {

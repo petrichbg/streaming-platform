@@ -2,10 +2,18 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, clearToken } from '@/lib/api';
 
 interface SessionUser { sub: string; email: string; isAdmin: boolean; profileId?: string }
+interface AdminUser {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt: string;
+  sessionVersion: number;
+  _count: { profiles: number };
+}
 interface Job {
   id: string;
   status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
@@ -14,8 +22,6 @@ interface Job {
   attempt: number;
   targetHeight: number;
   createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
   error: string | null;
   mediaFile: { sourcePath: string };
 }
@@ -31,6 +37,7 @@ const statusCopy: Record<Job['status'], { icon: string; label: string }> = {
 export default function SettingsPage() {
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [queueStatus, setQueueStatus] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -43,43 +50,67 @@ export default function SettingsPage() {
   const load = useCallback(async () => {
     const current = await api.get<SessionUser>('/auth/me');
     setUser(current);
-    if (current.isAdmin) {
-      const [recent, status] = await Promise.all([
-        api.get<Job[]>('/transcode/jobs'),
-        api.get<{ queue: Record<string, number> }>('/transcode/status'),
-      ]);
-      setJobs(recent);
-      setQueueStatus(status.queue);
-    }
+    if (!current.isAdmin) return;
+    const [recent, status, accounts] = await Promise.all([
+      api.get<Job[]>('/transcode/jobs'),
+      api.get<{ queue: Record<string, number> }>('/transcode/status'),
+      api.get<AdminUser[]>('/auth/users'),
+    ]);
+    setJobs(recent);
+    setQueueStatus(status.queue);
+    setUsers(accounts);
   }, []);
 
   useEffect(() => {
-    void load().catch((err) => setError(err instanceof Error ? err.message : 'Настройките не могат да се заредят.'));
+    void load().catch((err) => setError(errorMessage(err, 'Настройките не могат да се заредят.')));
     const timer = window.setInterval(() => void load().catch(() => undefined), 5000);
     return () => window.clearInterval(timer);
   }, [load]);
 
-  async function run(name: string, action: () => Promise<unknown>, message?: string) {
-    setBusy(name); setError(null); setResult(null);
+  const queueTotal = useMemo(
+    () => Object.values(queueStatus).reduce((sum, count) => sum + count, 0),
+    [queueStatus],
+  );
+
+  async function run(name: string, action: () => Promise<unknown>, message: string) {
+    setBusy(name);
+    setError(null);
+    setResult(null);
     try {
       const response = await action();
-      setResult(message ?? JSON.stringify(response, null, 2));
+      const detail = response && typeof response === 'object' ? `\n${JSON.stringify(response, null, 2)}` : '';
+      setResult(`${message}${detail}`);
       setConfirmRequeue(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Действието е неуспешно.');
-    } finally { setBusy(null); }
+      setError(errorMessage(err, 'Действието е неуспешно.'));
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function changePassword(event: React.FormEvent) {
     event.preventDefault();
-    setBusy('password'); setError(null);
+    setBusy('password');
+    setError(null);
     try {
       await api.post('/auth/change-password', { currentPassword, newPassword });
       clearToken();
-      router.push('/login');
+      router.replace('/login');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Паролата не може да бъде сменена.');
+      setError(errorMessage(err, 'Паролата не може да бъде сменена.'));
+      setBusy(null);
+    }
+  }
+
+  async function revokeOwnSessions() {
+    setBusy('own-sessions');
+    try {
+      await api.post('/auth/revoke-sessions', {});
+      clearToken();
+      router.replace('/login');
+    } catch (err) {
+      setError(errorMessage(err, 'Сесиите не могат да бъдат прекратени.'));
       setBusy(null);
     }
   }
@@ -87,42 +118,85 @@ export default function SettingsPage() {
   function jobAction(job: Job) {
     const actionBusy = busy?.endsWith(job.id);
     if (job.status === 'QUEUED' || job.status === 'RUNNING') {
-      return <button className="job-action job-action-danger" disabled={Boolean(busy)} onClick={() => void run(`cancel:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/cancel`, {}), 'Job-ът е отказан и временните HLS файлове са почистени.')}>{actionBusy ? 'Отказване…' : 'Откажи'}</button>;
+      return <button className="job-action job-action-danger" disabled={Boolean(busy)} onClick={() => void run(`cancel:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/cancel`, {}), 'Задачата е отказана и временните файлове са почистени.')}>{actionBusy ? 'Отказване…' : 'Откажи'}</button>;
     }
     return <div className="job-actions">
-      {(job.status === 'FAILED' || job.status === 'CANCELLED') && <button className="job-action" disabled={Boolean(busy)} onClick={() => void run(`retry:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/retry`, {}), 'Нов опит е добавен в опашката със същия encoder.')}>{busy === `retry:${job.id}` ? 'Добавяне…' : 'Опитай пак'}</button>}
+      {(job.status === 'FAILED' || job.status === 'CANCELLED') && <button className="job-action" disabled={Boolean(busy)} onClick={() => void run(`retry:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/retry`, {}), 'Нов опит е добавен в опашката.')}>{busy === `retry:${job.id}` ? 'Добавяне…' : 'Опитай пак'}</button>}
       {confirmRequeue === job.id
-        ? <span className="requeue-confirm"><span>Старият HLS ще бъде изтрит.</span><button className="job-action job-action-danger" disabled={Boolean(busy)} onClick={() => void run(`requeue:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/requeue`, {}), 'Rendition-ът е почистен и добавен отново в опашката.')}>Потвърди</button><button className="job-action" onClick={() => setConfirmRequeue(null)}>Назад</button></span>
+        ? <span className="requeue-confirm"><span>Старият HLS ще бъде заменен.</span><button className="job-action job-action-danger" disabled={Boolean(busy)} onClick={() => void run(`requeue:${job.id}`, () => api.post(`/transcode/jobs/${job.id}/requeue`, {}), 'Rendition-ът е добавен отново в опашката.')}>Потвърди</button><button className="job-action" onClick={() => setConfirmRequeue(null)}>Назад</button></span>
         : <button className="job-action" disabled={Boolean(busy)} onClick={() => setConfirmRequeue(job.id)}>Requeue</button>}
     </div>;
   }
 
   return <main className="container-fluid page settings-page" id="main-content">
-    <header className="collection-header"><div><span className="eyebrow">Система</span><h1>Настройки</h1></div><Link className="back-link" href="/">← Библиотека</Link></header>
-    <div aria-live="polite" aria-atomic="true">{error && <div className="alert alert-danger">{error}</div>}{result && <div className="alert alert-success">{result}</div>}</div>
-    {user && <section className="password-panel card"><div><span className="eyebrow">Акаунт</span><h2>Смяна на парола</h2><p className="muted">Използвай поне 10 знака. Промяната прекратява всички активни сесии.</p></div><form onSubmit={changePassword}><input type="password" autoComplete="current-password" placeholder="Текуща парола" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="Нова парола" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}/><button disabled={Boolean(busy) || newPassword.length < 10}>{busy === 'password' ? 'Запазване…' : 'Смени паролата'}</button></form></section>}
-    {user && !user.isAdmin && <div className="empty-state"><div><h2>Само за администратори</h2><p className="muted">Този профил няма права за системни операции.</p></div></div>}
+    <header className="collection-header settings-header">
+      <div><span className="eyebrow">Контролен център</span><h1>Акаунт и администрация</h1><p className="muted">Сигурност на акаунта, библиотека и надеждност на възпроизвеждането.</p></div>
+      <Link className="back-link" href="/">← Библиотека</Link>
+    </header>
+
+    <nav className="settings-nav" aria-label="Секции на настройките">
+      <a href="#account">Акаунт</a>
+      {user?.isAdmin && <><a href="#operations">Операции</a><a href="#users">Потребители</a><a href="#jobs">Transcode jobs</a></>}
+    </nav>
+
+    <div className="settings-feedback" aria-live="polite" aria-atomic="true">
+      {error && <div className="alert alert-danger">{error}</div>}
+      {result && <details className="alert alert-success"><summary>Действието завърши успешно</summary><pre>{result}</pre></details>}
+    </div>
+
+    {user && <section className="settings-section account-section" id="account">
+      <div className="section-heading"><div><span className="eyebrow">Лични настройки</span><h2>Акаунт</h2></div><span className={`role-badge ${user.isAdmin ? 'role-admin' : ''}`}>{user.isAdmin ? 'Администратор' : 'Потребител'}</span></div>
+      <div className="account-layout">
+        <div className="account-identity"><span className="account-avatar" aria-hidden="true">{user.email.slice(0, 1).toUpperCase()}</span><div><strong>{user.email}</strong><span className="muted">ID {user.sub.slice(0, 8)}</span></div></div>
+        <form className="account-password-form" onSubmit={changePassword}>
+          <div><h3>Смяна на парола</h3><p className="muted">Минимум 10 знака. Всички издадени сесии ще бъдат прекратени.</p></div>
+          <label>Текуща парола<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+          <label>Нова парола<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={10} required /></label>
+          <button disabled={Boolean(busy) || newPassword.length < 10}>{busy === 'password' ? 'Запазване…' : 'Смени паролата'}</button>
+        </form>
+        <div className="session-control"><div><h3>Активни сесии</h3><p className="muted">Излез от всички телефони, телевизори и браузъри, включително този.</p></div><button className="secondary-button danger-button" disabled={Boolean(busy)} onClick={() => void revokeOwnSessions()}>{busy === 'own-sessions' ? 'Прекратяване…' : 'Изход от всички устройства'}</button></div>
+      </div>
+    </section>}
+
+    {user && !user.isAdmin && <div className="empty-state"><div><h2>Системните настройки са ограничени</h2><p className="muted">Акаунтът ти може да управлява профили, списък и история. Само администратор поддържа библиотеката и transcoding системата.</p></div></div>}
+
     {user?.isAdmin && <>
-      <section className="admin-actions" aria-label="Административни действия">
-        <article className="admin-card"><span className="admin-index">01</span><h2>Библиотека</h2><p>Открива нови файлове и ги добавя в каталога.</p><button disabled={Boolean(busy)} onClick={() => void run('scan', () => api.post('/media/scan', {}))}>{busy === 'scan' ? 'Сканиране…' : 'Сканирай сега'}</button></article>
-        <article className="admin-card"><span className="admin-index">02</span><h2>Метаданни</h2><p>Допълва описания, рейтинги, жанрове и постери от TMDB.</p><button disabled={Boolean(busy)} onClick={() => void run('metadata', () => api.post('/metadata/refresh', {}))}>{busy === 'metadata' ? 'Обновяване…' : 'Обнови липсващите'}</button></article>
-        <article className="admin-card"><span className="admin-index">03</span><h2>Транскодиране</h2><p>Проверява какво не може да се пусне директно. Не добавя jobs.</p><button disabled={Boolean(busy)} onClick={() => void run('transcode', () => api.post('/transcode/missing', { dryRun: true, limit: 10 }))}>{busy === 'transcode' ? 'Проверка…' : 'Провери липсващите'}</button></article>
+      <section className="settings-section" id="operations">
+        <div className="section-heading"><div><span className="eyebrow">Само за администратори</span><h2>Системни операции</h2></div><span className="system-state"><i aria-hidden="true" /> Системата работи</span></div>
+        <div className="admin-actions" aria-label="Административни действия">
+          <article className="admin-card"><span className="admin-index">01</span><div><h3>Сканиране</h3><p>Открива нови медийни файлове и ги добавя в каталога.</p></div><button disabled={Boolean(busy)} onClick={() => void run('scan', () => api.post('/media/scan', {}), 'Сканирането приключи.')}>{busy === 'scan' ? 'Сканиране…' : 'Сканирай библиотеката'}</button></article>
+          <article className="admin-card"><span className="admin-index">02</span><div><h3>Поправка на каталога</h3><p>Показва как parser-ът би пренаредил несвързаните заглавия, без да променя данни.</p></div><button disabled={Boolean(busy)} onClick={() => void run('repair', () => api.post('/media/repair', { dryRun: true }), 'Dry-run проверката приключи.')}>{busy === 'repair' ? 'Проверка…' : 'Прегледай поправките'}</button></article>
+          <article className="admin-card"><span className="admin-index">03</span><div><h3>Метаданни</h3><p>Допълва описания, жанрове, рейтинги, постери и backdrop изображения от TMDB.</p></div><button disabled={Boolean(busy)} onClick={() => void run('metadata', () => api.post('/metadata/refresh', {}), 'Липсващите метаданни са обработени.')}>{busy === 'metadata' ? 'Обновяване…' : 'Обнови липсващите'}</button></article>
+          <article className="admin-card"><span className="admin-index">04</span><div><h3>Липсващи HLS версии</h3><p>Провери безопасно или добави до 10 несъвместими файла в transcode опашката.</p></div><div className="admin-card-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void run('transcode-check', () => api.post('/transcode/missing', { dryRun: true, limit: 10 }), 'Проверката приключи.')}>{busy === 'transcode-check' ? 'Проверка…' : 'Само провери'}</button><button disabled={Boolean(busy)} onClick={() => { if (window.confirm('Да добавя до 10 файла в transcode опашката?')) void run('transcode-start', () => api.post('/transcode/missing', { dryRun: false, limit: 10 }), 'Файловете са добавени в опашката.'); }}>{busy === 'transcode-start' ? 'Добавяне…' : 'Добави в опашката'}</button></div></article>
+        </div>
       </section>
-      <section className="jobs-section">
-        <div className="jobs-heading"><div><span className="eyebrow">Последни 50</span><h2>Transcode jobs</h2></div><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void load()}>Обнови</button></div>
+
+      <section className="settings-section" id="users">
+        <div className="section-heading"><div><span className="eyebrow">Достъп</span><h2>Потребители</h2><p className="muted">Ролите и сесиите се прилагат веднага. Промяна на роля прекратява старите сесии.</p></div><span className="section-count">{users.length}</span></div>
+        <div className="users-table" role="list">
+          {users.map((account) => <article key={account.id} role="listitem">
+            <div className="user-main"><span className="user-avatar" aria-hidden="true">{account.email.slice(0, 1).toUpperCase()}</span><div><strong>{account.email}</strong><span>{account._count.profiles} {account._count.profiles === 1 ? 'профил' : 'профила'} · от {new Date(account.createdAt).toLocaleDateString('bg-BG')}</span></div></div>
+            <span className={`role-badge ${account.isAdmin ? 'role-admin' : ''}`}>{account.isAdmin ? 'Администратор' : 'Потребител'}</span>
+            <div className="user-actions">
+              <button className="secondary-button" disabled={Boolean(busy) || account.id === user.sub} onClick={() => void run(`role:${account.id}`, () => api.patch(`/auth/users/${account.id}/role`, { isAdmin: !account.isAdmin }), account.isAdmin ? 'Администраторската роля е премахната.' : 'Потребителят вече е администратор.')}>{account.isAdmin ? 'Премахни admin' : 'Направи admin'}</button>
+              <button className="secondary-button" disabled={Boolean(busy) || account.id === user.sub} onClick={() => void run(`sessions:${account.id}`, () => api.post(`/auth/users/${account.id}/revoke-sessions`, {}), 'Сесиите на потребителя са прекратени.')}>Прекрати сесиите</button>
+            </div>
+          </article>)}
+        </div>
+      </section>
+
+      <section className="settings-section jobs-section" id="jobs">
+        <div className="jobs-heading section-heading"><div><span className="eyebrow">Последни 50</span><h2>Transcode jobs</h2></div><div className="heading-actions"><span className="queue-total">{queueTotal} в опашката</span><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void load()}>Обнови</button></div></div>
         <div className="queue-strip" aria-label="Състояние на опашката">{Object.entries(queueStatus).map(([name, count]) => <div key={name}><span>{name}</span><strong>{count}</strong></div>)}</div>
-        {jobs.length === 0 ? <div className="empty-state"><div><h3>Опашката е празна</h3><p className="muted">Новите jobs ще се появят тук с действия за управление.</p></div></div> : <div className="jobs-table" role="list">{jobs.map((job) => {
+        {jobs.length === 0 ? <div className="empty-state"><div><h3>Опашката е празна</h3><p className="muted">Новите задачи ще се появят тук.</p></div></div> : <div className="jobs-table" role="list">{jobs.map((job) => {
           const status = statusCopy[job.status];
-          return <article key={job.id} role="listitem">
-            <span className={`status status-${job.status.toLowerCase()}`}><span aria-hidden="true">{status.icon}</span> {status.label}</span>
-            <div className="job-file"><strong title={job.mediaFile.sourcePath}>{job.mediaFile.sourcePath}</strong>{job.error && <details><summary>Диагностика</summary><pre>{job.error}</pre></details>}</div>
-            <span className="job-encoder">{job.encoder} · {job.targetHeight}p{job.fallbackFrom && <small>fallback от {job.fallbackFrom}</small>}</span>
-            <span className="job-attempt">Опит {job.attempt}</span>
-            <time dateTime={job.createdAt}>{new Date(job.createdAt).toLocaleString('bg-BG')}</time>
-            {jobAction(job)}
-          </article>;
+          return <article key={job.id} role="listitem"><span className={`status status-${job.status.toLowerCase()}`}><span aria-hidden="true">{status.icon}</span> {status.label}</span><div className="job-file"><strong title={job.mediaFile.sourcePath}>{job.mediaFile.sourcePath}</strong>{job.error && <details><summary>Диагностика</summary><pre>{job.error}</pre></details>}</div><span className="job-encoder">{job.encoder} · {job.targetHeight}p{job.fallbackFrom && <small>fallback от {job.fallbackFrom}</small>}</span><span className="job-attempt">Опит {job.attempt}</span><time dateTime={job.createdAt}>{new Date(job.createdAt).toLocaleString('bg-BG')}</time>{jobAction(job)}</article>;
         })}</div>}
       </section>
     </>}
   </main>;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }

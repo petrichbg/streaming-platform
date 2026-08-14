@@ -2,6 +2,8 @@ const baseUrl = process.env.SECURITY_TEST_BASE_URL ?? 'http://127.0.0.1:3000';
 const checks = [
   ['health is public', '/health', 200],
   ['account requires auth', '/auth/me', 401],
+  ['user administration requires admin auth', '/auth/users', 401],
+  ['session revocation requires auth', '/auth/revoke-sessions', 401, { method: 'POST' }],
   ['library scan requires admin auth', '/media/scan', 401, { method: 'POST' }],
   ['transcode status requires admin auth', '/transcode/status', 401],
   ['transcode cancel requires admin auth', '/transcode/jobs/00000000-0000-0000-0000-000000000000/cancel', 401, { method: 'POST' }],

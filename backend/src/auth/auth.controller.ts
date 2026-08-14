@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { AdminGuard } from './admin.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 interface CredentialsBody {
@@ -38,6 +39,37 @@ export class AuthController {
       throw new BadRequestException('Current password and a new password of at least 10 characters are required');
     }
     return this.auth.changePassword(req.user.sub, body.currentPassword, body.newPassword);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('revoke-sessions')
+  revokeOwnSessions(@Req() req: any) {
+    return this.auth.revokeSessions(req.user.sub);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('users')
+  users() {
+    return this.auth.listUsers();
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Patch('users/:userId/role')
+  updateRole(
+    @Req() req: any,
+    @Param('userId') userId: string,
+    @Body() body: { isAdmin?: boolean },
+  ) {
+    if (typeof body.isAdmin !== 'boolean') {
+      throw new BadRequestException('isAdmin must be a boolean');
+    }
+    return this.auth.updateUserRole(req.user.sub, userId, body.isAdmin);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('users/:userId/revoke-sessions')
+  revokeUserSessions(@Param('userId') userId: string) {
+    return this.auth.revokeSessions(userId);
   }
 }
 
