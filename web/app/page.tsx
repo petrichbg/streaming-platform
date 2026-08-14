@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   API_URL,
@@ -38,6 +38,26 @@ export default function BrowsePage() {
   const [featuredDetail, setFeaturedDetail] = useState<TitleDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
+  const [heroStopped, setHeroStopped] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+      if (event.key === 'Escape' && document.activeElement === searchRef.current) {
+        setQuery('');
+        searchRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, []);
 
   // Profiles load once; the catalog below re-fetches whenever the choice
   // changes, because the rating cap is applied server-side per profile.
@@ -188,7 +208,27 @@ export default function BrowsePage() {
     (!genreFilter || title.genres.includes(genreFilter)) &&
     (!yearFilter || title.releaseYear === Number(yearFilter)),
   );
-  const featured = [...(titles ?? [])].filter((title) => title.posterPath).sort((a, b) => b.popularity - a.popularity)[0];
+  const featuredTitles = useMemo(
+    () => [...(titles ?? [])]
+      .filter((title) => title.backdropPath)
+      .sort((a, b) => b.popularity - a.popularity || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 5),
+    [titles],
+  );
+  const featured = featuredTitles[featuredIndex] ?? featuredTitles[0];
+
+  useEffect(() => {
+    if (featuredIndex >= featuredTitles.length) setFeaturedIndex(0);
+  }, [featuredIndex, featuredTitles.length]);
+
+  useEffect(() => {
+    if (heroPaused || heroStopped || featuredTitles.length < 2 || term || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const timer = window.setInterval(
+      () => setFeaturedIndex((current) => (current + 1) % featuredTitles.length),
+      8000,
+    );
+    return () => window.clearInterval(timer);
+  }, [featuredTitles.length, heroPaused, heroStopped, term]);
 
   useEffect(() => {
     if (!featured) {
@@ -196,6 +236,7 @@ export default function BrowsePage() {
       return;
     }
     let cancelled = false;
+    setFeaturedDetail(null);
     api.get<TitleDetail>(`/titles/${featured.id}${profileId ? `?profileId=${profileId}` : ''}`)
       .then((detail) => { if (!cancelled) setFeaturedDetail(detail); })
       .catch(() => { if (!cancelled) setFeaturedDetail(null); });
@@ -224,6 +265,7 @@ export default function BrowsePage() {
         <label className="nav-search">
           <span aria-hidden="true">⌕</span>
           <input
+            ref={searchRef}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -307,8 +349,19 @@ export default function BrowsePage() {
         </div>
       )}
 
+      {!titles && !error && !term && <HeroSkeleton />}
       {featured && !term && (
-        <section className="featured-hero" style={{ backgroundImage: `url(${API_URL}${featured.posterPath})` }}>
+        <section
+          className="featured-hero"
+          style={{ backgroundImage: `url(${API_URL}${featured.backdropPath})` }}
+          aria-roledescription="carousel"
+          role="region"
+          aria-label="Избрани заглавия"
+          onMouseEnter={() => setHeroPaused(true)}
+          onMouseLeave={() => setHeroPaused(false)}
+          onFocusCapture={() => setHeroPaused(true)}
+          onBlurCapture={() => setHeroPaused(false)}
+        >
           <div className="featured-content">
             <div className="featured-meta">
               <span className="featured-badge">НОВ</span>
@@ -324,7 +377,10 @@ export default function BrowsePage() {
               <button className="btn btn-outline-light" onClick={() => router.push(`/title/${featured.id}`)}>ⓘ <span>Повече информация</span></button>
             </div>
           </div>
-          <div className="hero-pagination" aria-hidden="true"><span className="active"/><span/><span/><span/><span/></div>
+          {featuredTitles.length > 1 && <div className="hero-pagination" role="group" aria-label="Избери заглавие">
+            {featuredTitles.map((item, index) => <button key={item.id} className={index === featuredIndex ? 'active' : ''} aria-label={`${index + 1}: ${item.name}`} aria-current={index === featuredIndex ? 'true' : undefined} onClick={() => setFeaturedIndex(index)} />)}
+          </div>}
+          {featuredTitles.length > 1 && <button type="button" className="hero-pause" onClick={() => setHeroStopped((stopped) => !stopped)} aria-label={heroStopped ? 'Пусни автоматичната смяна' : 'Спри автоматичната смяна'}>{heroStopped ? '▶' : 'Ⅱ'}</button>}
         </section>
       )}
 
@@ -347,7 +403,9 @@ export default function BrowsePage() {
                   aria-label={`Продължи ${title.name}`}
                 >
                   <div className="continue-art">
-                    {title.posterPath && <img src={`${API_URL}${title.posterPath}`} alt="" />}
+                    {title.backdropPath
+                      ? <img src={`${API_URL}${title.backdropPath}`} alt="" />
+                      : <span className="continue-art-fallback" aria-hidden="true" />}
                     <span className="continue-play" aria-hidden="true">▶</span>
                     <span className="progress-track"><span style={{ width: `${percent}%` }} /></span>
                   </div>
@@ -409,6 +467,15 @@ export default function BrowsePage() {
   );
 }
 
+function HeroSkeleton() {
+  return <section className="hero-skeleton" aria-label="Зареждане на избрано заглавие" aria-busy="true">
+    <div className="skeleton-line skeleton-kicker" />
+    <div className="skeleton-line skeleton-title" />
+    <div className="skeleton-line skeleton-copy" />
+    <div className="skeleton-actions"><span /><span /></div>
+  </section>;
+}
+
 /**
  * The API answers in English; the rest of this interface is in Bulgarian, and
  * a wrong PIN is the one error an ordinary viewer will actually meet.
@@ -455,14 +522,8 @@ function TitleCard({ title, profileId }: { title: TitleListItem; profileId: stri
     <article
       className="card title-card"
       style={{ display: 'grid', gap: 8 }}
-      onClick={() => router.push(`/title/${title.id}`)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') router.push(`/title/${title.id}`);
-      }}
-      role="link"
-      tabIndex={0}
-      aria-label={`Отвори ${title.name}`}
     >
+      <button className="title-card-open" type="button" onClick={() => router.push(`/title/${title.id}`)} aria-label={`Отвори ${title.name}`} />
       {title.posterPath ? (
         // Plain <img> rather than next/image: the poster endpoint lives on the
         // API origin, which next/image would need allow-listed for no real

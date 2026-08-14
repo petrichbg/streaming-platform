@@ -4,7 +4,8 @@ import { ConfigService } from '@nestjs/config';
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 // w500 balances quality against download time for a whole library; the
 // originals are needlessly large for a LAN client.
-const IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+const POSTER_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+const BACKDROP_IMAGE_BASE = 'https://image.tmdb.org/t/p/w1280';
 
 export interface TmdbMatch {
   tmdbId: number;
@@ -12,6 +13,7 @@ export interface TmdbMatch {
   overview: string | null;
   releaseYear: number | null;
   posterPath: string | null;
+  backdropPath: string | null;
   genres: string[];
 }
 
@@ -23,6 +25,7 @@ interface SearchResult {
   first_air_date?: string;
   overview?: string;
   poster_path?: string | null;
+  backdrop_path?: string | null;
 }
 
 @Injectable()
@@ -36,7 +39,7 @@ export class TmdbService {
   }
 
   posterUrl(posterPath: string): string {
-    return `${IMAGE_BASE}${posterPath}`;
+    return `${POSTER_IMAGE_BASE}${posterPath}`;
   }
 
   /** Best-effort match for a movie. Returns null when nothing plausible is found. */
@@ -54,6 +57,7 @@ export class TmdbService {
       overview: hit.overview || null,
       releaseYear: parseYear(hit.release_date),
       posterPath: hit.poster_path ?? null,
+      backdropPath: hit.backdrop_path ?? null,
       genres: await this.fetchGenres('movie', hit.id),
     };
   }
@@ -71,6 +75,7 @@ export class TmdbService {
       overview: hit.overview || null,
       releaseYear: parseYear(hit.first_air_date),
       posterPath: hit.poster_path ?? null,
+      backdropPath: hit.backdrop_path ?? null,
       genres: await this.fetchGenres('tv', hit.id),
     };
   }
@@ -108,6 +113,12 @@ export class TmdbService {
     if (!response.ok) {
       throw new Error(`Poster download failed: ${response.status}`);
     }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async downloadBackdrop(backdropPath: string): Promise<Buffer> {
+    const response = await fetch(`${BACKDROP_IMAGE_BASE}${backdropPath}`);
+    if (!response.ok) throw new Error(`Backdrop download failed: ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   }
 

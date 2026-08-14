@@ -59,4 +59,15 @@ export class MetadataController {
 
     return new StreamableFile(createReadStream(filePath));
   }
+
+  @Get('backdrops/:file')
+  @Header('Content-Type', 'image/jpeg')
+  @Header('Cache-Control', 'public, max-age=86400')
+  async getBackdrop(@Param('file') file: string): Promise<StreamableFile> {
+    const match = POSTER_FILE.exec(file);
+    if (!match) throw new BadRequestException('Invalid backdrop name');
+    const filePath = this.metadata.backdropFilePath(match[1]);
+    try { await access(filePath); } catch { throw new NotFoundException('Backdrop not found'); }
+    return new StreamableFile(createReadStream(filePath));
+  }
 }

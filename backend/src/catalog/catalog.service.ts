@@ -10,6 +10,7 @@ export interface TitleListItem {
   releaseYear: number | null;
   genres: string[];
   posterPath: string | null;
+  backdropPath: string | null;
   episodeCount: number;
   mediaFileCount: number;
   createdAt: Date;
@@ -54,6 +55,7 @@ export class CatalogService {
         releaseYear: t.releaseYear,
         genres: t.genres,
         posterPath: t.posterPath,
+        backdropPath: t.backdropPath,
         episodeCount: t._count.episodes,
         mediaFileCount: t._count.mediaFiles,
         createdAt: t.createdAt,
