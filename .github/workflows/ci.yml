@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [master, "codex/**"]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, typecheck and Prisma validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            web/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Generate and validate Prisma client
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://streaming:changeme@127.0.0.1:5432/streaming
+        run: |
+          npx prisma generate
+          npx prisma validate
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck web
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Build web
+        working-directory: web
+        run: npm run build
+
+  integration:
+    name: Migrations, integration and security
+    runs-on: ubuntu-latest
+    env:
+      DOMAIN: streaming.local
+      POSTGRES_USER: streaming
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: streaming
+      REDIS_PASSWORD: changeme
+      DATABASE_URL: postgresql://streaming:changeme@127.0.0.1:5432/streaming
+      REDIS_URL: redis://:changeme@127.0.0.1:6379
+      JWT_SECRET: ci-only-secret-with-at-least-32-characters
+      MEDIA_ROOT: /tmp/streaming-media
+      POSTER_ROOT: /tmp/streaming-posters
+      TRANSCODE_OUTPUT_ROOT: /tmp/streaming-transcoded
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          mkdir -p /tmp/streaming-media /tmp/streaming-posters /tmp/streaming-transcoded
+          docker compose up -d postgres redis
+
+      - name: Install and build backend
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma generate
+          npx prisma migrate deploy
+          npm run build
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          npm run start:prod > ../backend-ci.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat ../backend-ci.log
+          exit 1
+
+      - name: Run security checks
+        working-directory: backend
+        run: npm run test:security
+
+      - name: Run integration suite
+        working-directory: backend
+        shell: pwsh
+        run: ../scripts/integration-test.ps1
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          cat backend-ci.log || true
+          docker compose logs postgres redis || true
+
+      - name: Stop test services
+        if: always()
+        run: docker compose down --volumes
