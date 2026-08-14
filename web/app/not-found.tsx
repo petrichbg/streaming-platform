@@ -8,7 +8,7 @@ export default function NotFound() {
         <span className="eyebrow">Изгубен кадър</span>
         <h1>Тази страница не е в програмата.</h1>
         <p className="muted">Върни се към библиотеката и избери нещо за гледане.</p>
-        <Link className="button-link" href="/">Към библиотеката</Link>
+        <Link className="btn btn-primary btn-lg" href="/">Към библиотеката</Link>
       </div>
     </main>
   );

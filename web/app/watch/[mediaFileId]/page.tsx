@@ -296,13 +296,13 @@ export default function WatchPage() {
       </nav>
 
       {error && (
-        <div className="player-message error" style={{ marginTop: 16 }}>
+        <div className="alert alert-danger player-message" style={{ marginTop: 16 }}>
           {error}
         </div>
       )}
 
       {plan?.mode === 'unavailable' && (
-        <div className="player-message muted" style={{ marginTop: 16 }}>
+        <div className="alert alert-secondary player-message" style={{ marginTop: 16 }}>
           Този файл не може да се пусне директно ({plan.reason}) и няма транскодирана
           версия. Пусни <code>POST /transcode</code> за него.
         </div>

@@ -9,6 +9,17 @@
   --accent-ink: #111609;
   --danger: #ff8585;
   --shadow: 0 24px 60px rgba(0, 8, 16, .35);
+  --bs-body-bg: var(--bg);
+  --bs-body-color: var(--text);
+  --bs-primary: #d8ff63;
+  --bs-primary-rgb: 216, 255, 99;
+  --bs-secondary-bg: var(--surface);
+  --bs-border-color: var(--border);
+  --bs-border-radius: .65rem;
+  --bs-border-radius-lg: .9rem;
+  --bs-link-color: var(--text);
+  --bs-link-hover-color: var(--accent);
+  --bs-focus-ring-color: rgba(216, 255, 99, .38);
 }
 
 * {
@@ -93,6 +104,46 @@ select {
   margin: 0 auto;
   padding: 40px clamp(20px, 4vw, 64px) 80px;
 }
+
+/* Bootstrap 5.3 is the component and responsive foundation. These overrides
+   keep its semantics while giving the product the approved cinematic skin. */
+.stream-wordmark {
+  color: var(--accent);
+  font-family: "Arial Narrow", "Aptos Display", sans-serif;
+  font-size: clamp(1.45rem, 2.2vw, 2rem);
+  font-weight: 900;
+  letter-spacing: .22em;
+  line-height: 1;
+}
+.navbar-brand { margin-right: clamp(1.5rem, 4vw, 4.5rem); }
+.navbar-nav .nav-link { color: var(--muted); font-weight: 600; }
+.navbar-nav .nav-link:hover, .navbar-nav .nav-link:focus { color: var(--text); }
+.profile-select { width: auto; min-width: 8rem; }
+.btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: .45rem; font-weight: 700; }
+.btn-primary {
+  --bs-btn-color: var(--accent-ink);
+  --bs-btn-bg: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-color: var(--accent-ink);
+  --bs-btn-hover-bg: #e2ff87;
+  --bs-btn-hover-border-color: #e2ff87;
+  --bs-btn-active-color: var(--accent-ink);
+  --bs-btn-active-bg: #c4ed4d;
+  --bs-btn-active-border-color: #c4ed4d;
+}
+.btn-outline-light { --bs-btn-border-color: rgba(255,255,255,.28); --bs-btn-hover-color: var(--text); --bs-btn-hover-bg: rgba(255,255,255,.1); }
+.form-control, .form-select {
+  border-color: var(--border);
+  background-color: rgba(17,22,28,.9);
+  color: var(--text);
+  color-scheme: dark;
+}
+.form-control:focus, .form-select:focus { border-color: var(--accent); background-color: var(--surface); color: var(--text); box-shadow: 0 0 0 .25rem rgba(216,255,99,.12); }
+.form-select option { background: var(--surface); }
+.alert { border-color: currentColor; background: rgba(255,255,255,.045); color: var(--text); }
+.alert-danger { color: #ff9c9c; background: rgba(255,82,82,.08); }
+.featured-badge { padding: .48rem .65rem; border: 1px solid rgba(216,255,99,.4); border-radius: .35rem; color: var(--accent) !important; letter-spacing: .08em; }
+.catalog-filters .form-select { width: auto; min-width: 10.5rem; }
 
 .card {
   background: var(--surface);

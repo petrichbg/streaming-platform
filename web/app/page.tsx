@@ -191,9 +191,9 @@ export default function BrowsePage() {
   const popular = [...(titles ?? [])].sort((a, b) => b.popularity - a.popularity).slice(0, 10);
 
   return (
-    <main className="page browse-page" id="main-content">
+    <main className="container-fluid page browse-page" id="main-content">
       <header
-        className="site-header"
+        className="navbar navbar-expand-lg site-header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -201,13 +201,14 @@ export default function BrowsePage() {
           marginBottom: 24,
         }}
       >
-        <div className="brand-block">
-          <span className="eyebrow">Лична селекция</span>
-          <h1 style={{ margin: 0 }}>Библиотека</h1>
+        <div className="navbar-brand brand-block">
+          <span className="stream-wordmark">STREAM</span>
+          <span className="visually-hidden">Лична селекция · Библиотека</span>
         </div>
-        <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="navbar-nav ms-auto header-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {profiles.length > 0 && (
             <select
+              className="form-select form-select-sm profile-select"
               value={profileId ?? ''}
               onChange={(event) => switchProfile(event.target.value)}
               aria-label="Профил"
@@ -221,16 +222,16 @@ export default function BrowsePage() {
               ))}
             </select>
           )}
-          <Link href="/profiles" className="header-link muted" style={{ fontSize: 14 }}>
+          <Link href="/profiles" className="nav-link header-link muted" style={{ fontSize: 14 }}>
             Профили
           </Link>
-          <Link href="/my-list" className="header-link muted" style={{ fontSize: 14 }}>
+          <Link href="/my-list" className="nav-link header-link muted" style={{ fontSize: 14 }}>
             Моят списък
           </Link>
-          <Link href="/settings" className="header-link muted" style={{ fontSize: 14 }}>
+          <Link href="/settings" className="nav-link header-link muted" style={{ fontSize: 14 }}>
             Настройки
           </Link>
-          <button className="ghost-button signout-button" onClick={signOut} style={{ background: 'transparent' }}>
+          <button className="btn btn-outline-light btn-sm ghost-button signout-button" onClick={signOut} style={{ background: 'transparent' }}>
             Изход
           </button>
         </div>
@@ -238,7 +239,7 @@ export default function BrowsePage() {
 
       {pendingProfileId && (
         <form
-          className="card pin-card"
+          className="card pin-card shadow-lg"
           style={{ display: 'grid', gap: 8, maxWidth: 320, marginBottom: 16 }}
           onSubmit={(event) => {
             event.preventDefault();
@@ -290,7 +291,7 @@ export default function BrowsePage() {
 
       {featured && !term && (
         <section className="featured-hero" style={{ backgroundImage: `url(${API_URL}${featured.posterPath})` }}>
-          <div className="featured-content"><span className="eyebrow">Избрано за тази вечер</span><h2>{featured.name}</h2><p>{featured.genres.slice(0, 3).join(' · ')}{featured.releaseYear ? ` · ${featured.releaseYear}` : ''}</p><div><button onClick={() => router.push(`/title/${featured.id}`)}>Виж детайли</button><Link href="/my-list" className="featured-link">Моят списък</Link></div></div>
+          <div className="featured-content"><span className="badge text-bg-dark featured-badge">Избрано за тази вечер</span><h2>{featured.name}</h2><p>{featured.genres.slice(0, 3).join(' · ')}{featured.releaseYear ? ` · ${featured.releaseYear}` : ''}</p><div><button className="btn btn-primary btn-lg" onClick={() => router.push(`/title/${featured.id}`)}>▶ Гледай сега</button><button className="btn btn-outline-light btn-lg" onClick={() => router.push(`/title/${featured.id}`)}>ⓘ Повече информация</button></div></div>
         </section>
       )}
 
@@ -353,8 +354,8 @@ export default function BrowsePage() {
         <div className="segmented-control">
           {([['ALL','Всички'],['MOVIE','Филми'],['SERIES','Сериали']] as const).map(([value,label]) => <button key={value} className={typeFilter === value ? 'active' : ''} onClick={() => setTypeFilter(value)}>{label}</button>)}
         </div>
-        <select aria-label="Жанр" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}><option value="">Всички жанрове</option>{genres.map((genre) => <option key={genre}>{genre}</option>)}</select>
-        <select aria-label="Година" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="">Всички години</option>{years.map((year) => <option key={year}>{year}</option>)}</select>
+        <select className="form-select form-select-sm" aria-label="Жанр" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}><option value="">Всички жанрове</option>{genres.map((genre) => <option key={genre}>{genre}</option>)}</select>
+        <select className="form-select form-select-sm" aria-label="Година" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="">Всички години</option>{years.map((year) => <option key={year}>{year}</option>)}</select>
         {(typeFilter !== 'ALL' || genreFilter || yearFilter) && <button className="clear-filters" onClick={() => {setTypeFilter('ALL');setGenreFilter('');setYearFilter('');}}>Изчисти</button>}
       </div>
 

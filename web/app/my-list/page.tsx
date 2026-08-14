@@ -29,11 +29,11 @@ export default function MyListPage() {
     setItems((current) => current?.filter((item) => item.titleId !== titleId) ?? []);
   }
 
-  return <main className="page collection-page" id="main-content">
+  return <main className="container-fluid page collection-page" id="main-content">
     <header className="collection-header"><div><span className="eyebrow">Запазено за по-късно</span><h1>Моят списък</h1></div><Link className="back-link" href="/">← Библиотека</Link></header>
-    {error && <div className="error">{error}</div>}
+    {error && <div className="alert alert-danger">{error}</div>}
     {!items && !error && <div className="grid">{[0,1,2,3,4].map((n) => <div className="poster-skeleton" key={n}/>)}</div>}
-    {items?.length === 0 && <div className="empty-state"><div><h2>Списъкът е празен</h2><p className="muted">Добавяй заглавия от техните detail страници.</p><Link className="button-link" href="/">Разгледай библиотеката</Link></div></div>}
+    {items?.length === 0 && <div className="empty-state"><div><h2>Списъкът е празен</h2><p className="muted">Добавяй заглавия от техните detail страници.</p><Link className="btn btn-primary" href="/">Разгледай библиотеката</Link></div></div>}
     <div className="grid">{items?.map(({title}) => <article className="saved-card" key={title.id}>
       <button className="saved-open" onClick={() => router.push(`/title/${title.id}`)}>{title.posterPath ? <img src={`${API_URL}${title.posterPath}`} alt={title.name}/> : <span>Без постер</span>}</button>
       <div><strong>{title.name}</strong><span className="muted">{title.type === 'SERIES' ? 'Сериал' : 'Филм'}{title.releaseYear ? ` · ${title.releaseYear}` : ''}</span></div>

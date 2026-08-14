@@ -47,9 +47,9 @@ export default function SettingsPage() {
     }
   }
 
-  return <main className="page settings-page" id="main-content">
+  return <main className="container-fluid page settings-page" id="main-content">
     <header className="collection-header"><div><span className="eyebrow">Система</span><h1>Настройки</h1></div><Link className="back-link" href="/">← Библиотека</Link></header>
-    {error && <div className="player-message error">{error}</div>}
+    {error && <div className="alert alert-danger">{error}</div>}
     {user && <section className="password-panel card"><div><span className="eyebrow">Акаунт</span><h2>Смяна на парола</h2><p className="muted">Използвай поне 10 знака и различна парола от текущата. След промяната всички устройства ще трябва да влязат отново.</p></div><form onSubmit={changePassword}><input type="password" autoComplete="current-password" placeholder="Текуща парола" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}/><input type="password" autoComplete="new-password" placeholder="Нова парола" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}/><button disabled={Boolean(busy) || newPassword.length < 10}>{busy === 'password' ? 'Запазване…' : 'Смени паролата'}</button></form></section>}
     {user && !user.isAdmin && <div className="empty-state"><div><h2>Само за администратори</h2><p className="muted">Този профил няма права за системни операции.</p></div></div>}
     {user?.isAdmin && <>

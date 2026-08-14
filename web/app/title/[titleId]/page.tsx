@@ -97,9 +97,9 @@ export default function TitlePage() {
           {title.overview && <p>{title.overview}</p>}
           <div className="detail-actions">
             <button disabled={!firstMedia} onClick={() => firstMedia && router.push(`/watch/${firstMedia.id}`)}><span aria-hidden="true">▶</span> Гледай</button>
-            {profileId && <button className="secondary-button" disabled={busy} onClick={toggleWatchlist}>{inWatchlist ? '✓ В моя списък' : '+ Моят списък'}</button>}
+            {profileId && <button className="btn btn-outline-light btn-lg secondary-button" disabled={busy} onClick={toggleWatchlist}>{inWatchlist ? '✓ В моя списък' : '+ Моят списък'}</button>}
           </div>
-          {error && <p className="error">{error}</p>}
+          {error && <div className="alert alert-danger">{error}</div>}
         </div>
       </section>
 
@@ -122,7 +122,7 @@ function EpisodeRow({ episode, onPlay }: { episode: TitleDetail['episodes'][numb
     <article className="episode-row">
       <span className="episode-number">С{episode.seasonNumber}<br />Е{episode.episodeNumber}</span>
       <div><strong>{episode.name || `Епизод ${episode.episodeNumber}`}</strong><span>{media?.durationSec ? `${Math.round(media.durationSec / 60)} мин.` : 'Продължителност неизвестна'}</span></div>
-      <button className="secondary-button" disabled={!media} onClick={() => media && onPlay(media)}>▶</button>
+      <button className="btn btn-outline-light secondary-button" disabled={!media} onClick={() => media && onPlay(media)}>▶</button>
     </article>
   );
 }

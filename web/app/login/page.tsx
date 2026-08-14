@@ -36,7 +36,7 @@ export default function LoginPage() {
         <h1>Твоята библиотека.<br />Без излишния шум.</h1>
         <p>Филми, сериали и продължаване оттам, докъдето си стигнал.</p>
       </section>
-      <form onSubmit={submit} className="card login-card" style={{ display: 'grid', gap: 12 }}>
+      <form onSubmit={submit} className="card login-card shadow-lg" style={{ display: 'grid', gap: 12 }}>
         <div>
           <span className="eyebrow">Добре дошъл</span>
           <h2>Вход</h2>
@@ -67,7 +67,7 @@ export default function LoginPage() {
             required
           />
         </label>
-        {error && <div className="error">{error}</div>}
+        {error && <div className="alert alert-danger">{error}</div>}
         <button type="submit" disabled={busy}>
           {busy ? 'Влизане...' : 'Влез'}
         </button>

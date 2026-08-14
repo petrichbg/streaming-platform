@@ -41,7 +41,7 @@ export default function SelectProfilePage() {
           {profile.hasPin && <small>Заключен с PIN</small>}
         </button>
       ))}</div>}
-      {profiles?.length === 0 && <div className="empty-state"><p>Все още няма профил.</p><Link className="button-link" href="/profiles">Създай профил</Link></div>}
+      {profiles?.length === 0 && <div className="empty-state"><p>Все още няма профил.</p><Link className="btn btn-primary" href="/profiles">Създай профил</Link></div>}
       {pending && <form className="picker-pin card" onSubmit={(event) => { event.preventDefault(); void choose(pending, pin); }}><strong>PIN за {pending.name}</strong><input autoFocus type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} aria-label="PIN" placeholder="••••"/><div><button disabled={!pin}>Продължи</button><button type="button" className="ghost-button" onClick={() => {setPending(null);setPin('');}}>Отказ</button></div></form>}
       {error && <div className="error picker-error">{error}</div>}
       <Link href="/profiles" className="muted picker-manage">Управление на профили</Link>

@@ -55,7 +55,7 @@ export default function ProfilesPage() {
   const restricted = Boolean(current?.maxRating);
 
   return (
-    <main className="page profiles-page" id="main-content">
+    <main className="container-fluid page profiles-page" id="main-content">
       <header
         className="profiles-header"
         style={{
