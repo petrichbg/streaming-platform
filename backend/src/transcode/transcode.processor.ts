@@ -3,12 +3,12 @@ import { Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import { execFile } from 'child_process';
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { FfprobeService } from '../media/ffprobe.service';
 import { audioKbpsFor, bitrateBudgetFor } from './bitrates';
-import { AmfEncoder, TRANSCODE_QUEUE, TranscodeJobData } from './transcode.constants';
+import { AMF_ENCODERS, AmfEncoder, TRANSCODE_QUEUE, TranscodeEncoder, TranscodeJobData } from './transcode.constants';
+import { HlsCleanupService } from './hls-cleanup.service';
 
 /**
  * Target segment length. Segments can only be cut on a keyframe, so the
@@ -27,11 +27,13 @@ export const MASTER_PLAYLIST = 'master.m3u8';
 @Processor(TRANSCODE_QUEUE)
 export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(TranscodeProcessor.name);
+  private readonly activeProcesses = new Map<string, ReturnType<typeof execFile>>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly ffprobe: FfprobeService,
     private readonly config: ConfigService,
+    private readonly cleanup: HlsCleanupService,
   ) {
     super();
   }
@@ -52,17 +54,44 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
 
     await this.prisma.transcodeJob.update({
       where: { id: transcodeJobId },
-      data: { status: 'RUNNING', startedAt: new Date() },
+      data: { status: 'RUNNING', startedAt: new Date(), attempt: job.data.attempt ?? 1 },
     });
 
     try {
-      const outputPath = await this.runFfmpeg(mediaFileId, encoder, targetHeight);
+      let outputPath: string;
+      try {
+        outputPath = await this.runFfmpeg(transcodeJobId, mediaFileId, encoder, targetHeight);
+      } catch (error) {
+        const message = (error as Error).message;
+        const current = await this.prisma.transcodeJob.findUnique({ where: { id: transcodeJobId } });
+        if (current?.status === 'CANCELLED') throw error;
+        if (!AMF_ENCODERS.includes(encoder as AmfEncoder) || !isAmfFailure(message)) throw error;
+        this.logger.warn(`AMF failed for job ${transcodeJobId}; retrying once with libx264`);
+        await this.cleanup.discardWork(mediaFileId, targetHeight, transcodeJobId);
+        await this.prisma.transcodeJob.update({
+          where: { id: transcodeJobId },
+          data: { encoder: 'libx264', fallbackFrom: encoder, error: `AMF fallback: ${message.slice(0, 1500)}` },
+        });
+        outputPath = await this.runFfmpeg(transcodeJobId, mediaFileId, 'libx264', targetHeight);
+      }
+      const current = await this.prisma.transcodeJob.findUnique({ where: { id: transcodeJobId } });
+      if (current?.status === 'CANCELLED') {
+        await this.cleanup.removeRendition(mediaFileId, targetHeight);
+        this.logger.warn(`Discarded completed output for cancelled job ${transcodeJobId}`);
+        return;
+      }
       await this.prisma.transcodeJob.update({
         where: { id: transcodeJobId },
-        data: { status: 'DONE', finishedAt: new Date(), outputPath },
+        data: { status: 'DONE', finishedAt: new Date(), outputPath, error: null },
       });
     } catch (err) {
       const message = (err as Error).message;
+      await this.cleanup.discardWork(mediaFileId, targetHeight, transcodeJobId);
+      const current = await this.prisma.transcodeJob.findUnique({ where: { id: transcodeJobId } });
+      if (current?.status === 'CANCELLED') {
+        this.logger.warn(`Transcode job ${transcodeJobId} cancelled`);
+        return;
+      }
       this.logger.error(`Transcode job ${transcodeJobId} failed: ${message}`);
       await this.prisma.transcodeJob.update({
         where: { id: transcodeJobId },
@@ -73,8 +102,9 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
   }
 
   private async runFfmpeg(
+    transcodeJobId: string,
     mediaFileId: string,
-    encoder: AmfEncoder,
+    encoder: TranscodeEncoder,
     targetHeight: number,
   ): Promise<string> {
     const mediaFile = await this.prisma.mediaFile.findUniqueOrThrow({
@@ -82,10 +112,8 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
     });
 
     const mediaRoot = this.config.get<string>('media.root')!;
-    const outputRoot = this.config.get<string>('transcode.outputRoot')!;
     const sourcePath = path.join(mediaRoot, mediaFile.sourcePath);
-    const outDir = path.join(outputRoot, mediaFileId, `${targetHeight}p`);
-    await fs.mkdir(outDir, { recursive: true });
+    const outDir = await this.cleanup.prepare(mediaFileId, targetHeight, transcodeJobId);
     // "%v" is replaced with the variant index: stream_0 is the video, and one
     // stream_N follows per audio track. Everything lands flat in one directory
     // so the paths stay easy to validate on the way back out.
@@ -134,6 +162,15 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
       );
     });
 
+    const encoderArgs = encoder === 'libx264'
+      ? ['-c:v', 'libx264', '-preset', 'medium', '-pix_fmt', 'yuv420p']
+      : [
+          '-c:v', encoder,
+          '-quality', 'balanced',
+          '-rc', 'vbr_peak',
+          '-vbaq', '1',
+        ];
+
     const args = [
       '-y',
       '-i', sourcePath,
@@ -148,19 +185,10 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
       ...audioMaps,
       '-sn',
       '-vf', videoFilters.join(','),
-      '-c:v', encoder,
-      '-quality', 'balanced',
-      // Without an explicit rate control mode AMF chooses its own target and
-      // it is enormous -- see bitrates.ts for the measurement. "vbr_peak" is
-      // the one mode whose numeric id is the same for h264_amf and hevc_amf,
-      // so passing it by name is safe for both.
-      '-rc', 'vbr_peak',
+      ...encoderArgs,
       '-b:v', `${budget.videoKbps}k`,
       '-maxrate', `${budget.maxrateKbps}k`,
       '-bufsize', `${budget.bufsizeKbps}k`,
-      // Variance-based adaptive quantisation: spends bits on flat areas where
-      // banding shows instead of on detail that hides it.
-      '-vbaq', '1',
       // A segment can only start on a keyframe. Pinning the GOP to the segment
       // length is what actually makes -hls_time below take effect.
       '-g', String(gopFrames),
@@ -181,7 +209,8 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
     ];
 
     await new Promise<void>((resolve, reject) => {
-      execFile('ffmpeg', args, { maxBuffer: 20 * 1024 * 1024 }, (error, _stdout, stderr) => {
+      const child = execFile('ffmpeg', args, { maxBuffer: 20 * 1024 * 1024 }, (error, _stdout, stderr) => {
+        this.activeProcesses.delete(transcodeJobId);
         if (!error) return resolve();
 
         // execFile's own message is just the command line, so a failed job
@@ -192,10 +221,28 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
         this.logger.error(`ffmpeg failed for ${masterPath}\n${stderr.trim().slice(-4000)}`);
         reject(new Error(`ffmpeg failed: ${reason || error.message}`));
       });
+      this.activeProcesses.set(transcodeJobId, child);
     });
 
-    return masterPath;
+    return this.cleanup.publish(mediaFileId, targetHeight, transcodeJobId);
   }
+
+  async cancelJob(transcodeJobId: string): Promise<boolean> {
+    const child = this.activeProcesses.get(transcodeJobId);
+    if (!child?.pid) return false;
+    if (process.platform === 'win32') {
+      await new Promise<void>((resolve) => {
+        execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => resolve());
+      });
+    } else {
+      child.kill('SIGTERM');
+    }
+    return true;
+  }
+}
+
+function isAmfFailure(message: string): boolean {
+  return /\b(amf|vce)\b|hardware encoder|encoder .*not found|initializ(?:e|ation)|device setup failed|no capable devices/i.test(message);
 }
 
 /**

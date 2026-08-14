@@ -1,4 +1,4 @@
-import { AmfEncoder } from './transcode.constants';
+import { TranscodeEncoder } from './transcode.constants';
 
 /**
  * Bitrate budget for one rendition.
@@ -60,7 +60,7 @@ export function audioKbpsFor(channels: number | undefined): number {
   return (channels ?? 2) > 2 ? SURROUND_KBPS : AUDIO_KBPS;
 }
 
-export function bitrateBudgetFor(encoder: AmfEncoder, targetHeight: number): BitrateBudget {
+export function bitrateBudgetFor(encoder: TranscodeEncoder, targetHeight: number): BitrateBudget {
   // The smallest rung that still covers the requested height, so an unusual
   // height is funded like the next standard one up rather than starved.
   const rung =

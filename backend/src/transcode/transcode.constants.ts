@@ -1,6 +1,7 @@
 export const TRANSCODE_QUEUE = 'transcode';
 
 export type AmfEncoder = 'h264_amf' | 'hevc_amf';
+export type TranscodeEncoder = AmfEncoder | 'libx264';
 
 export const AMF_ENCODERS: ReadonlyArray<AmfEncoder> = ['h264_amf', 'hevc_amf'];
 
@@ -17,8 +18,10 @@ export const ALLOWED_HEIGHTS: ReadonlyArray<number> = [360, 480, 720, 1080, 1440
 
 export interface TranscodeJobInput {
   mediaFileId: string;
-  encoder: AmfEncoder;
+  encoder: TranscodeEncoder;
   targetHeight: number;
+  attempt?: number;
+  fallbackFrom?: AmfEncoder;
 }
 
 export interface TranscodeJobData extends TranscodeJobInput {

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
@@ -15,6 +15,8 @@ import {
   TranscodeJobInput,
   renditionKey,
 } from './transcode.constants';
+import { TranscodeProcessor } from './transcode.processor';
+import { HlsCleanupService } from './hls-cleanup.service';
 
 export interface BulkTranscodeInput {
   encoder: AmfEncoder;
@@ -53,6 +55,8 @@ export class TranscodeQueueService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly ffprobe: FfprobeService,
+    private readonly processor: TranscodeProcessor,
+    private readonly cleanup: HlsCleanupService,
   ) {}
 
   listRecentJobs() {
@@ -227,6 +231,8 @@ export class TranscodeQueueService {
       data: {
         mediaFileId: input.mediaFileId,
         encoder: input.encoder,
+        fallbackFrom: input.fallbackFrom,
+        attempt: input.attempt ?? 1,
         targetHeight: input.targetHeight,
         status: 'QUEUED',
       },
@@ -253,5 +259,76 @@ export class TranscodeQueueService {
     }
 
     return job;
+  }
+
+  async cancel(jobId: string) {
+    const job = await this.getJob(jobId);
+    if (!['QUEUED', 'RUNNING'].includes(job.status)) {
+      throw new ConflictException(`Only queued or running jobs can be cancelled; job is ${job.status}`);
+    }
+    await this.prisma.transcodeJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'CANCELLED',
+        cancelRequestedAt: new Date(),
+        finishedAt: new Date(),
+        error: 'Cancelled by administrator',
+      },
+    });
+    const queueJob = await this.queue.getJob(renditionKey(job.mediaFileId, job.targetHeight));
+    if (queueJob) {
+      const state = await queueJob.getState();
+      if (state === 'active') await this.processor.cancelJob(job.id);
+      else await queueJob.remove();
+    }
+    await this.cleanup.discardWork(job.mediaFileId, job.targetHeight, job.id);
+    return this.getJob(job.id);
+  }
+
+  async retry(jobId: string) {
+    const job = await this.getJob(jobId);
+    if (!['FAILED', 'CANCELLED'].includes(job.status)) {
+      throw new ConflictException(`Only failed or cancelled jobs can be retried; job is ${job.status}`);
+    }
+    await this.releaseQueueSlot(job.mediaFileId, job.targetHeight);
+    return this.enqueue({
+      mediaFileId: job.mediaFileId,
+      encoder: job.encoder as TranscodeJobInput['encoder'],
+      targetHeight: job.targetHeight,
+      attempt: job.attempt + 1,
+      fallbackFrom: job.fallbackFrom as TranscodeJobInput['fallbackFrom'],
+    });
+  }
+
+  async requeue(jobId: string) {
+    const job = await this.getJob(jobId);
+    if (['QUEUED', 'RUNNING'].includes(job.status)) {
+      throw new ConflictException('Cancel an active job before requeueing it');
+    }
+    await this.releaseQueueSlot(job.mediaFileId, job.targetHeight);
+    await this.cleanup.removeRendition(job.mediaFileId, job.targetHeight);
+    const encoder = (job.fallbackFrom ?? job.encoder) as TranscodeJobInput['encoder'];
+    return this.enqueue({
+      mediaFileId: job.mediaFileId,
+      encoder,
+      targetHeight: job.targetHeight,
+      attempt: job.attempt + 1,
+    });
+  }
+
+  private async getJob(jobId: string) {
+    const job = await this.prisma.transcodeJob.findUnique({
+      where: { id: jobId },
+      include: { mediaFile: { select: { sourcePath: true } } },
+    });
+    if (!job) throw new NotFoundException(`Transcode job ${jobId} not found`);
+    return job;
+  }
+
+  private async releaseQueueSlot(mediaFileId: string, targetHeight: number) {
+    const queued = await this.queue.getJob(renditionKey(mediaFileId, targetHeight));
+    if (!queued) return;
+    if ((await queued.getState()) === 'active') throw new ConflictException('The queue slot is still active');
+    await queued.remove();
   }
 }

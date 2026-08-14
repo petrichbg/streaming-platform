@@ -1,0 +1,6 @@
+ALTER TYPE "TranscodeStatus" ADD VALUE IF NOT EXISTS 'CANCELLED';
+
+ALTER TABLE "TranscodeJob"
+  ADD COLUMN "fallbackFrom" TEXT,
+  ADD COLUMN "attempt" INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN "cancelRequestedAt" TIMESTAMP(3);

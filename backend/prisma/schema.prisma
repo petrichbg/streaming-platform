@@ -97,6 +97,7 @@ enum TranscodeStatus {
   RUNNING
   DONE
   FAILED
+  CANCELLED
 }
 
 model TranscodeJob {
@@ -105,6 +106,8 @@ model TranscodeJob {
   mediaFileId  String
   // h264_amf | hevc_amf | libx264 (CPU fallback) — see config/configuration.ts
   encoder      String
+  fallbackFrom String?
+  attempt      Int              @default(1)
   targetHeight Int
   status       TranscodeStatus  @default(QUEUED)
   outputPath   String?
@@ -112,6 +115,7 @@ model TranscodeJob {
   createdAt    DateTime         @default(now())
   startedAt    DateTime?
   finishedAt   DateTime?
+  cancelRequestedAt DateTime?
 }
 
 model WatchProgress {

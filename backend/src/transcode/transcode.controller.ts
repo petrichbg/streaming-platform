@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { TranscodeQueueService } from './transcode-queue.service';
@@ -31,6 +31,21 @@ export class TranscodeController {
   @Post()
   async enqueue(@Body() body: Partial<TranscodeJobInput>) {
     return this.queue.enqueue(this.queue.validate(body));
+  }
+
+  @Post('jobs/:jobId/cancel')
+  cancel(@Param('jobId') jobId: string) {
+    return this.queue.cancel(jobId);
+  }
+
+  @Post('jobs/:jobId/retry')
+  retry(@Param('jobId') jobId: string) {
+    return this.queue.retry(jobId);
+  }
+
+  @Post('jobs/:jobId/requeue')
+  requeue(@Param('jobId') jobId: string) {
+    return this.queue.requeue(jobId);
   }
 
   /**
