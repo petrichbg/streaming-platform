@@ -19,6 +19,8 @@ import {
 } from '@/lib/api';
 
 const SAVE_INTERVAL_MS = 10_000;
+const MAX_MEDIA_RECOVERY_ATTEMPTS = 2;
+const MAX_NETWORK_RECOVERY_ATTEMPTS = 2;
 // Below this the position counts as "not really started", and past
 // (duration - this) as "finished", so neither resumes mid-credits.
 const RESUME_EDGE_SEC = 15;
@@ -223,15 +225,58 @@ export default function WatchPage() {
 
     let disposed = false;
     let instance: Hls | null = null;
+    let mediaRecoveryAttempts = 0;
+    let networkRecoveryAttempts = 0;
+    let lastMediaRecoveryAt = 0;
     void import('hls.js').then(({ default: HlsRuntime }) => {
       if (disposed) return;
       if (!HlsRuntime.isSupported()) {
         setError('Този браузър не поддържа защитеното HLS възпроизвеждане.');
         return;
       }
-      const hls = new HlsRuntime({ xhrSetup: (xhr) => { if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`); } });
+      const hls = new HlsRuntime({
+        xhrSetup: (xhr) => {
+          if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        },
+      });
       instance = hls;
-      hls.on(HlsRuntime.Events.ERROR, (_event, data) => { if (data.fatal) setError(`Playback error: ${data.type} / ${data.details}`); });
+      hls.on(HlsRuntime.Events.ERROR, (_event, data) => {
+        if (!data.fatal || disposed) return;
+
+        // A SourceBuffer can require a fresh MediaSource after a decoder or
+        // timestamp discontinuity. hls.js exposes recoverMediaError() for
+        // exactly this case; surfacing the first reset as a terminal error
+        // leaves an otherwise valid H.264/AAC stream on a blank frame.
+        if (data.type === HlsRuntime.ErrorTypes.MEDIA_ERROR) {
+          const now = Date.now();
+          if (now - lastMediaRecoveryAt > 30_000) mediaRecoveryAttempts = 0;
+          lastMediaRecoveryAt = now;
+          mediaRecoveryAttempts += 1;
+          if (mediaRecoveryAttempts <= MAX_MEDIA_RECOVERY_ATTEMPTS) {
+            setError(null);
+            if (mediaRecoveryAttempts === MAX_MEDIA_RECOVERY_ATTEMPTS) {
+              hls.swapAudioCodec();
+            }
+            hls.recoverMediaError();
+            return;
+          }
+        }
+
+        if (data.type === HlsRuntime.ErrorTypes.NETWORK_ERROR) {
+          networkRecoveryAttempts += 1;
+          if (networkRecoveryAttempts <= MAX_NETWORK_RECOVERY_ATTEMPTS) {
+            setError(null);
+            hls.startLoad();
+            return;
+          }
+        }
+
+        setError(`Playback error: ${data.type} / ${data.details}`);
+      });
+      hls.on(HlsRuntime.Events.FRAG_BUFFERED, () => {
+        networkRecoveryAttempts = 0;
+        setError(null);
+      });
       hls.on(HlsRuntime.Events.MANIFEST_PARSED, seek);
       const readAudioTracks = () => {
         setAudioTracks(hls.audioTracks.map((track, index) => ({ id: track.id, label: audioLabel(track, index) })));
