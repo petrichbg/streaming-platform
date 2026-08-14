@@ -14,6 +14,7 @@ import { StreamModule } from './stream/stream.module';
 import { MetadataModule } from './metadata/metadata.module';
 import { HealthController } from './health.controller';
 import { AuditMiddleware } from './monitoring/audit.middleware';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { AuditMiddleware } from './monitoring/audit.middleware';
     SubtitlesModule,
     StreamModule,
     MetadataModule,
+    AdminModule,
   ],
   controllers: [HealthController],
 })

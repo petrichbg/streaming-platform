@@ -4,6 +4,7 @@ const checks = [
   ['account requires auth', '/auth/me', 401],
   ['user administration requires admin auth', '/auth/users', 401],
   ['session revocation requires auth', '/auth/revoke-sessions', 401, { method: 'POST' }],
+  ['admin overview requires admin auth', '/admin/overview', 401],
   ['library scan requires admin auth', '/media/scan', 401, { method: 'POST' }],
   ['transcode status requires admin auth', '/transcode/status', 401],
   ['transcode cancel requires admin auth', '/transcode/jobs/00000000-0000-0000-0000-000000000000/cancel', 401, { method: 'POST' }],

@@ -364,6 +364,11 @@ h2 { margin: .35rem 0 0; font-size: clamp(1.7rem, 3vw, 2.7rem); }
 .settings-feedback:empty { display: none; }
 .settings-feedback details summary { cursor: pointer; font-weight: 700; }
 .settings-feedback pre { max-height: 260px; margin: 12px 0 0; overflow: auto; white-space: pre-wrap; font-size: .78rem; }
+.settings-skeleton { display: grid; gap: 10px; margin-bottom: 28px; }
+.settings-skeleton span { height: 14px; border-radius: 7px; background: var(--surface); animation: shimmer 1.5s infinite; }
+.settings-skeleton span:nth-child(1) { width: 38%; }
+.settings-skeleton span:nth-child(2) { width: 72%; }
+.settings-skeleton span:nth-child(3) { width: 55%; }
 .settings-section { scroll-margin-top: 90px; padding-block: 34px 52px; border-top: 1px solid var(--border); }
 .settings-section:first-of-type { border-top: 0; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
@@ -373,6 +378,11 @@ h2 { margin: .35rem 0 0; font-size: clamp(1.7rem, 3vw, 2.7rem); }
 .role-admin { border-color: rgba(216,255,99,.35); background: rgba(216,255,99,.08); color: var(--accent); }
 .system-state { color: #a8d9c8; }
 .system-state i { width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #77cfad; box-shadow: 0 0 0 4px rgba(119,207,173,.1); }
+.overview-strip { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); margin-bottom: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 13px; background: var(--border); gap: 1px; }
+.overview-strip > div { display: grid; gap: 4px; padding: 15px 17px; background: var(--surface); }
+.overview-strip span { color: var(--muted); font-size: .74rem; }
+.overview-strip strong { font-size: 1.28rem; font-variant-numeric: tabular-nums; }
+.overview-strip .metric-danger { color: var(--danger); }
 .account-layout { display: grid; grid-template-columns: minmax(230px, .75fr) minmax(340px, 1.25fr); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--border); }
 .account-layout > * { background: var(--surface); }
 .account-identity { grid-row: span 2; display: flex; align-items: flex-start; gap: 15px; padding: 28px; }
@@ -404,6 +414,7 @@ h2 { margin: .35rem 0 0; font-size: clamp(1.7rem, 3vw, 2.7rem); }
 .heading-actions { align-items: center; }
 
 @media (max-width: 1120px) {
+  .overview-strip { grid-template-columns: repeat(3, 1fr); }
   .admin-actions { grid-template-columns: repeat(2, 1fr); }
   .account-password-form { grid-template-columns: 1fr 1fr; }
   .account-password-form button { grid-column: 1 / -1; }
@@ -421,6 +432,7 @@ h2 { margin: .35rem 0 0; font-size: clamp(1.7rem, 3vw, 2.7rem); }
   .session-control { align-items: flex-start; flex-direction: column; }
   .session-control button { width: 100%; }
   .admin-actions { grid-template-columns: 1fr; }
+  .overview-strip { grid-template-columns: repeat(2, 1fr); }
   .admin-card { min-height: 230px; }
   .users-table article { grid-template-columns: 1fr auto; }
   .user-actions { padding-left: 0; }

@@ -40,6 +40,7 @@ try {
   Assert-Status 'new access token works' (Invoke-TestRequest GET '/auth/me' $null $token) 200
   Assert-Status 'non-admin cannot scan library' (Invoke-TestRequest POST '/media/scan' @{} $token) 403
   Assert-Status 'non-admin cannot list users' (Invoke-TestRequest GET '/auth/users' $null $token) 403
+  Assert-Status 'non-admin cannot read admin overview' (Invoke-TestRequest GET '/admin/overview' $null $token) 403
 
   $profile = Invoke-TestRequest POST '/profiles' @{ name = 'Integration'; isKid = $false } $token
   Assert-Status 'create profile' $profile 201
