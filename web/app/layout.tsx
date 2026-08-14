@@ -8,6 +8,9 @@ export const metadata: Metadata = {
     template: '%s · Кино у дома',
   },
   description: 'Лична библиотека за филми и сериали.',
+  icons: {
+    icon: '/favicon.ico',
+  },
 };
 
 export const viewport: Viewport = {
