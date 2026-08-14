@@ -1,0 +1,8 @@
+ingress:
+  - hostname: petrich.live
+    service: http://127.0.0.1:3001
+  - hostname: www.petrich.live
+    service: http://127.0.0.1:3001
+  - hostname: api.petrich.live
+    service: http://127.0.0.1:3000
+  - service: http_status:404

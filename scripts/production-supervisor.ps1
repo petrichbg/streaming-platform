@@ -9,6 +9,9 @@ $webRoot = Join-Path $ProjectRoot 'web'
 $runtimeRoot = Join-Path $ProjectRoot 'var'
 $logRoot = Join-Path $runtimeRoot 'logs'
 $npmExe = (Get-Command npm.cmd -ErrorAction Stop).Source
+$cloudflaredExe = (Get-Command cloudflared.exe -ErrorAction Stop).Source
+$cloudflaredConfig = Join-Path $ProjectRoot 'cloudflared\streaming-platform.yml'
+$cloudflaredCredentials = Join-Path $runtimeRoot 'cloudflared\credentials.json'
 $mutex = [Threading.Mutex]::new($false, 'Global\StreamingPlatformProductionSupervisor')
 $ownsMutex = $false
 
@@ -50,13 +53,14 @@ try {
   function Start-AppProcess {
     param(
       [string]$Name,
+      [string]$FilePath,
       [string]$WorkingDirectory,
       [string[]]$Arguments
     )
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $stdout = Join-Path $logRoot "$Name-$stamp.stdout.log"
     $stderr = Join-Path $logRoot "$Name-$stamp.stderr.log"
-    $process = Start-Process -FilePath $npmExe -ArgumentList $Arguments `
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
       -WorkingDirectory $WorkingDirectory -WindowStyle Hidden `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     Write-SupervisorLog "$Name started with PID $($process.Id)."
@@ -68,7 +72,17 @@ try {
 
   $apps = @(
     @{
+      Name = 'cloudflared'
+      FilePath = $cloudflaredExe
+      WorkingDirectory = $ProjectRoot
+      Arguments = @('tunnel', '--config', $cloudflaredConfig, '--credentials-file', $cloudflaredCredentials, 'run', '5f28a08e-774c-4512-a995-2f39be805c7d')
+      Process = $null
+      Restarts = 0
+      StartedAt = $null
+    },
+    @{
       Name = 'backend'
+      FilePath = $npmExe
       WorkingDirectory = $backendRoot
       Arguments = @('run', 'start:prod')
       Process = $null
@@ -77,6 +91,7 @@ try {
     },
     @{
       Name = 'web'
+      FilePath = $npmExe
       WorkingDirectory = $webRoot
       Arguments = @('run', 'start')
       Process = $null
@@ -99,7 +114,8 @@ try {
           Start-Sleep -Seconds $delay
         }
         $app.Process = Start-AppProcess -Name $app.Name `
-          -WorkingDirectory $app.WorkingDirectory -Arguments $app.Arguments
+          -FilePath $app.FilePath -WorkingDirectory $app.WorkingDirectory `
+          -Arguments $app.Arguments
         $app.StartedAt = Get-Date
       }
     }
