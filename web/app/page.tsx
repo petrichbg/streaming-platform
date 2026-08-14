@@ -35,7 +35,9 @@ export default function BrowsePage() {
   const [yearFilter, setYearFilter] = useState('');
   const [searching, setSearching] = useState(false);
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingEntry[]>([]);
+  const [featuredDetail, setFeaturedDetail] = useState<TitleDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Profiles load once; the catalog below re-fetches whenever the choice
   // changes, because the rating cap is applied server-side per profile.
@@ -187,54 +189,70 @@ export default function BrowsePage() {
     (!yearFilter || title.releaseYear === Number(yearFilter)),
   );
   const featured = [...(titles ?? [])].filter((title) => title.posterPath).sort((a, b) => b.popularity - a.popularity)[0];
-  const recent = [...(titles ?? [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 10);
-  const popular = [...(titles ?? [])].sort((a, b) => b.popularity - a.popularity).slice(0, 10);
+
+  useEffect(() => {
+    if (!featured) {
+      setFeaturedDetail(null);
+      return;
+    }
+    let cancelled = false;
+    api.get<TitleDetail>(`/titles/${featured.id}${profileId ? `?profileId=${profileId}` : ''}`)
+      .then((detail) => { if (!cancelled) setFeaturedDetail(detail); })
+      .catch(() => { if (!cancelled) setFeaturedDetail(null); });
+    return () => { cancelled = true; };
+  }, [featured?.id, profileId]);
 
   return (
     <main className="container-fluid page browse-page" id="main-content">
-      <header
-        className="navbar navbar-expand-lg site-header"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 24,
-        }}
-      >
-        <div className="navbar-brand brand-block">
-          <span className="stream-wordmark">STREAM</span>
-          <span className="visually-hidden">Лична селекция · Библиотека</span>
-        </div>
-        <div className="navbar-nav ms-auto header-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {profiles.length > 0 && (
-            <select
-              className="form-select form-select-sm profile-select"
-              value={profileId ?? ''}
-              onChange={(event) => switchProfile(event.target.value)}
-              aria-label="Профил"
-            >
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.hasPin ? '🔒 ' : ''}
-                  {profile.name}
-                  {profile.maxRating ? ` (до ${profile.maxRating})` : ''}
-                </option>
-              ))}
-            </select>
-          )}
-          <Link href="/profiles" className="nav-link header-link muted" style={{ fontSize: 14 }}>
-            Профили
-          </Link>
-          <Link href="/my-list" className="nav-link header-link muted" style={{ fontSize: 14 }}>
-            Моят списък
-          </Link>
-          <Link href="/settings" className="nav-link header-link muted" style={{ fontSize: 14 }}>
-            Настройки
-          </Link>
-          <button className="btn btn-outline-light btn-sm ghost-button signout-button" onClick={signOut} style={{ background: 'transparent' }}>
-            Изход
-          </button>
-        </div>
+      <header className="stream-navbar">
+        <button
+          className="mobile-menu-toggle"
+          type="button"
+          aria-label="Отвори менюто"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <span /><span /><span />
+        </button>
+        <Link href="/" className="stream-wordmark">STREAM</Link>
+        <nav className={`stream-nav-links ${menuOpen ? 'is-open' : ''}`} aria-label="Основна навигация">
+          <Link href="/" className="active">Начало</Link>
+          <button type="button" onClick={() => setTypeFilter('MOVIE')}>Филми</button>
+          <button type="button" onClick={() => setTypeFilter('SERIES')}>Сериали</button>
+          <Link href="/my-list">Моят списък</Link>
+        </nav>
+        <label className="nav-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Търсене..."
+            aria-label="Търси по заглавие"
+          />
+          <kbd>⌘ K</kbd>
+        </label>
+        <details className="profile-menu">
+          <summary>
+            <span className="profile-mini-avatar">{activeProfile?.name.slice(0, 1).toUpperCase() ?? 'И'}</span>
+            <span>{activeProfile?.name ?? 'Профил'}</span>
+            <span aria-hidden="true">⌄</span>
+          </summary>
+          <div className="profile-menu-panel">
+            {profiles.length > 1 && (
+              <label>
+                <span>Смени профил</span>
+                <select value={profileId ?? ''} onChange={(event) => switchProfile(event.target.value)}>
+                  {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.hasPin ? '🔒 ' : ''}{profile.name}</option>)}
+                </select>
+              </label>
+            )}
+            <Link href="/profiles">♙ <span>Моят профил</span></Link>
+            <Link href="/my-list">▣ <span>Моят списък</span></Link>
+            <Link href="/settings">⚙ <span>Настройки</span></Link>
+            <button type="button" onClick={signOut}>↪ <span>Изход</span></button>
+          </div>
+        </details>
       </header>
 
       {pendingProfileId && (
@@ -291,16 +309,28 @@ export default function BrowsePage() {
 
       {featured && !term && (
         <section className="featured-hero" style={{ backgroundImage: `url(${API_URL}${featured.posterPath})` }}>
-          <div className="featured-content"><span className="badge text-bg-dark featured-badge">Избрано за тази вечер</span><h2>{featured.name}</h2><p>{featured.genres.slice(0, 3).join(' · ')}{featured.releaseYear ? ` · ${featured.releaseYear}` : ''}</p><div><button className="btn btn-primary btn-lg" onClick={() => router.push(`/title/${featured.id}`)}>▶ Гледай сега</button><button className="btn btn-outline-light btn-lg" onClick={() => router.push(`/title/${featured.id}`)}>ⓘ Повече информация</button></div></div>
+          <div className="featured-content">
+            <div className="featured-meta">
+              <span className="featured-badge">НОВ</span>
+              {featured.releaseYear && <span>{featured.releaseYear}</span>}
+              {featuredDetail?.mediaFiles[0]?.durationSec && <span>{formatMinutes(featuredDetail.mediaFiles[0].durationSec)}</span>}
+              {featured.genres.slice(0, 2).map((genre) => <span key={genre}>{genre}</span>)}
+              {featuredDetail?.rating && <span className="rating-chip">{featuredDetail.rating}</span>}
+            </div>
+            <h2>{featured.name}</h2>
+            <p>{featuredDetail?.overview ?? `${featured.genres.slice(0, 3).join(' · ')} от личната ти библиотека.`}</p>
+            <div className="featured-actions">
+              <button className="btn btn-primary" onClick={() => router.push(`/title/${featured.id}`)}>▶ <span>Гледай сега</span></button>
+              <button className="btn btn-outline-light" onClick={() => router.push(`/title/${featured.id}`)}>ⓘ <span>Повече информация</span></button>
+            </div>
+          </div>
+          <div className="hero-pagination" aria-hidden="true"><span className="active"/><span/><span/><span/><span/></div>
         </section>
       )}
 
       {continueWatching.length > 0 && !term && (
         <section className="continue-section" aria-labelledby="continue-title">
-          <div className="section-heading">
-            <span className="eyebrow">За {activeProfile?.name ?? 'теб'}</span>
-            <h2 id="continue-title">Продължи да гледаш</h2>
-          </div>
+          <div className="section-heading inline-heading"><h2 id="continue-title">Продължи да гледаш</h2><span aria-hidden="true">›</span></div>
           <div className="continue-row">
             {continueWatching.slice(0, 8).map((item) => {
               const title = item.title ?? item.episode?.title;
@@ -330,24 +360,8 @@ export default function BrowsePage() {
         </section>
       )}
 
-      {!term && recent.length > 0 && <TitleShelf title="Наскоро добавени" eyebrow="Ново в библиотеката" titles={recent} />}
-      {!term && popular.some((title) => title.popularity > 0) && <TitleShelf title="Популярни в библиотеката" eyebrow="Най-гледани" titles={popular.filter((title) => title.popularity > 0)} />}
-
-      <section className="catalog-intro" aria-label="Търсене в библиотеката">
-        <div>
-          <span className="eyebrow">{titles?.length ?? '—'} заглавия</span>
-          <h2>Какво ще гледаме?</h2>
-        </div>
-        <div className="search-wrap">
-          <span aria-hidden="true">⌕</span>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Търси филм или сериал"
-            aria-label="Търси по заглавие"
-          />
-        </div>
+      <section className="catalog-heading">
+        <h2>{term ? `Резултати за „${term}“` : 'Популярни в библиотеката'}</h2>
       </section>
 
       <div className="catalog-filters" aria-label="Филтри">
@@ -393,11 +407,6 @@ export default function BrowsePage() {
       </div>
     </main>
   );
-}
-
-function TitleShelf({ title, eyebrow, titles }: { title: string; eyebrow: string; titles: TitleListItem[] }) {
-  const router = useRouter();
-  return <section className="title-shelf"><div className="section-heading"><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><div className="shelf-row">{titles.map((item) => <button key={item.id} className="shelf-card" onClick={() => router.push(`/title/${item.id}`)}>{item.posterPath ? <img src={`${API_URL}${item.posterPath}`} alt=""/> : <span>Без постер</span>}<strong>{item.name}</strong></button>)}</div></section>;
 }
 
 /**
