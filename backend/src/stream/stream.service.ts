@@ -58,16 +58,20 @@ export class StreamService {
 
     const jobs = await this.prisma.transcodeJob.findMany({
       where: { mediaFileId, status: 'DONE' },
-      orderBy: { targetHeight: 'asc' },
+      orderBy: [{ targetHeight: 'asc' }, { finishedAt: 'asc' }],
     });
 
     // De-duplicate: re-running a transcode leaves several DONE rows for the
-    // same height, all pointing at the same output directory.
-    const heights = [...new Set(jobs.map((j) => j.targetHeight))];
+    // same height, all pointing at the same output directory. Keep the newest
+    // job id in the URL as a cache version. Segment responses are immutable,
+    // so a replacement rendition must never inherit an older master/variant
+    // playlist from the browser or CDN cache.
+    const newestByHeight = new Map<number, string>();
+    for (const job of jobs) newestByHeight.set(job.targetHeight, job.id);
 
-    return heights.map((height) => ({
+    return [...newestByHeight].map(([height, version]) => ({
       height,
-      playlistUrl: `/stream/${mediaFileId}/${height}/index.m3u8`,
+      playlistUrl: `/stream/${mediaFileId}/${height}/index.m3u8?v=${encodeURIComponent(version)}`,
     }));
   }
 
