@@ -22,6 +22,9 @@ scripts/gpu-test/gpu-test-results.csv
 # Screenshots and traces from driving the app with Playwright
 .playwright-mcp/
 
+# Runtime state and production logs
+var/
+
 # Media files never belong in the repo. A stray .mkv under backend/src/
 # also makes `nest start --watch` rescan gigabytes on every rebuild.
 *.mkv
