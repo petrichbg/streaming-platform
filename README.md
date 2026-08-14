@@ -46,10 +46,3 @@ backend/                  NestJS API: ingestion, transcode, catalog, auth, playb
 web/                      Next.js client: login, catalog, player (hls.js + direct play)
 docs/                     Architecture reference + setup guide
 ```
-
-## Legacy application
-
-The unrelated history previously stored on the remote default branch is
-preserved under `legacy/live-streaming-v1/`. It is an older Django, React and
-RTMP streaming application kept for historical reference; it is not part of
-the current build or deployment.
