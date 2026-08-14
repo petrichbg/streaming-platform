@@ -143,23 +143,37 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
     // routinely ship BG audio alongside the original, and keeping only track
     // zero silently picked one for the viewer.
     const audioMaps: string[] = [];
-    const audioRates: string[] = [];
-    // The video is variant 0; audio variants follow in the same order as the
-    // -map arguments.
-    const variants = ['v:0,agroup:aud'];
+    const audioOptions: string[] = [];
+    // A single audio stream belongs in the same variant as the video. Besides
+    // producing a simpler manifest, this avoids two independent MediaSource
+    // buffers for the overwhelmingly common case. Multiple language tracks
+    // still use alternate renditions so the player can switch between them.
+    const variants = audioStreams.length === 0
+      ? ['v:0']
+      : audioStreams.length === 1
+        ? ['v:0,a:0']
+        : ['v:0,agroup:aud'];
 
     audioStreams.forEach((stream, index) => {
       audioMaps.push('-map', `0:a:${index}`);
-      audioRates.push(`-b:a:${index}`, `${audioKbpsFor(stream.channels)}k`);
-      variants.push(
-        [
-          `a:${index}`,
-          'agroup:aud',
-          `language:${languageTagFor(stream)}`,
-          // Something has to be the default or players pick unpredictably.
-          ...(index === 0 ? ['default:yes'] : []),
-        ].join(','),
-      );
+      // AAC 5.1 may signal its channel layout through a Program Config
+      // Element that is emitted only at the beginning of the stream. A player
+      // starting from a later HLS segment then sees 0 channels / sample-rate 0
+      // and Chromium closes its MediaSource. Stereo uses the ADTS channel
+      // configuration on every frame and is safe for arbitrary seek starts.
+      audioOptions.push(`-ac:a:${index}`, '2');
+      audioOptions.push(`-b:a:${index}`, `${audioKbpsFor(2)}k`);
+      if (audioStreams.length > 1) {
+        variants.push(
+          [
+            `a:${index}`,
+            'agroup:aud',
+            `language:${languageTagFor(stream)}`,
+            // Something has to be the default or players pick unpredictably.
+            ...(index === 0 ? ['default:yes'] : []),
+          ].join(','),
+        );
+      }
     });
 
     const encoderArgs = encoder === 'libx264'
@@ -195,7 +209,7 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
       '-keyint_min', String(gopFrames),
       '-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
       '-c:a', 'aac',
-      ...audioRates,
+      ...audioOptions,
       // Splits the output into one playlist per stream and writes a master
       // that ties the audio group to the video. Without this the tracks are
       // muxed together and the player has nothing to switch between.
