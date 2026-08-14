@@ -11,6 +11,7 @@ export interface EnrichResult {
   matched: boolean;
   rating: string | null;
   posterSaved: boolean;
+  backdropSaved: boolean;
 }
 
 export interface RefreshStats {
@@ -82,7 +83,7 @@ export class MetadataService {
 
     if (!match) {
       this.logger.warn(`No TMDB match for "${title.name}"`);
-      return { titleId, name: title.name, matched: false, rating: null, posterSaved: false };
+      return { titleId, name: title.name, matched: false, rating: null, posterSaved: false, backdropSaved: false };
     }
 
     // TMDB may identify this as a film the catalogue already holds under its
@@ -103,7 +104,7 @@ export class MetadataService {
         this.logger.warn(
           `"${title.name}" is the same as "${duplicate.name}", which has viewer history; not merging`,
         );
-        return { titleId, name: title.name, matched: false, rating: null, posterSaved: false };
+        return { titleId, name: title.name, matched: false, rating: null, posterSaved: false, backdropSaved: false };
       }
 
       await this.prisma.$transaction([
@@ -113,12 +114,15 @@ export class MetadataService {
       ]);
 
       this.logger.log(`Merged "${title.name}" into existing "${duplicate.name}"`);
-      return { titleId: duplicate.id, name: duplicate.name, matched: true, rating: null, posterSaved: false };
+      return { titleId: duplicate.id, name: duplicate.name, matched: true, rating: null, posterSaved: false, backdropSaved: false };
     }
 
     const rating = await this.tmdb.fetchCertification(kind, match.tmdbId);
     const posterSaved = match.posterPath
       ? await this.savePoster(titleId, match.posterPath)
+      : false;
+    const backdropSaved = match.backdropPath
+      ? await this.saveBackdrop(titleId, match.backdropPath)
       : false;
 
     await this.prisma.title.update({
@@ -131,18 +135,24 @@ export class MetadataService {
         rating,
         genres: match.genres,
         posterPath: posterSaved ? `/metadata/posters/${titleId}.jpg` : title.posterPath,
+        backdropPath: backdropSaved ? `/metadata/backdrops/${titleId}.jpg` : title.backdropPath,
       },
     });
 
     this.logger.log(`Enriched "${title.name}" -> "${match.name}" (rating: ${rating ?? 'none'})`);
 
-    return { titleId, name: match.name, matched: true, rating, posterSaved };
+    return { titleId, name: match.name, matched: true, rating, posterSaved, backdropSaved };
   }
 
   /** Absolute path of a downloaded poster, for the serving endpoint. */
   posterFilePath(titleId: string): string {
     const posterRoot = this.config.get<string>('tmdb.posterRoot')!;
     return path.join(posterRoot, `${titleId}.jpg`);
+  }
+
+  backdropFilePath(titleId: string): string {
+    const posterRoot = this.config.get<string>('tmdb.posterRoot')!;
+    return path.join(posterRoot, 'backdrops', `${titleId}.jpg`);
   }
 
   private async savePoster(titleId: string, posterPath: string): Promise<boolean> {
@@ -155,6 +165,19 @@ export class MetadataService {
     } catch (err) {
       // A missing poster is cosmetic; it must not fail the whole enrichment.
       this.logger.warn(`Poster download failed for ${titleId}: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  private async saveBackdrop(titleId: string, backdropPath: string): Promise<boolean> {
+    try {
+      const bytes = await this.tmdb.downloadBackdrop(backdropPath);
+      const target = this.backdropFilePath(titleId);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, bytes);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Backdrop download failed for ${titleId}: ${(err as Error).message}`);
       return false;
     }
   }

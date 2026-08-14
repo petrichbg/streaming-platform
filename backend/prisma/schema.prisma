@@ -47,6 +47,7 @@ model Title {
   rating        String?
   genres        String[]
   posterPath    String?
+  backdropPath  String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   episodes      Episode[]

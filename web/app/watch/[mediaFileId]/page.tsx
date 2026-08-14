@@ -77,6 +77,9 @@ export default function WatchPage() {
   const hlsRef = useRef<Hls | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   const handleAuthError = useCallback(
     (err: unknown) => {
@@ -255,6 +258,38 @@ export default function WatchPage() {
     setAudioTrackId(id);
   }
 
+  function seekBy(seconds: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, Math.min(video.duration || Infinity, video.currentTime + seconds));
+  }
+
+  async function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) await video.play();
+    else video.pause();
+  }
+
+  async function toggleFullscreen() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await video.requestFullscreen();
+  }
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const sync = () => {
+      setIsPlaying(!video.paused);
+      setCurrentTime(video.currentTime || 0);
+      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    };
+    for (const event of ['play', 'pause', 'timeupdate', 'durationchange', 'loadedmetadata']) video.addEventListener(event, sync);
+    return () => { for (const event of ['play', 'pause', 'timeupdate', 'durationchange', 'loadedmetadata']) video.removeEventListener(event, sync); };
+  }, []);
+
   // ---- persist progress ---------------------------------------------------
   useEffect(() => {
     const video = videoRef.current;
@@ -308,6 +343,7 @@ export default function WatchPage() {
         </div>
       )}
 
+      <div className="player-stage">
       <video
         className="cinema-player"
         ref={videoRef}
@@ -330,6 +366,14 @@ export default function WatchPage() {
           />
         ))}
       </video>
+      <div className="mobile-player-controls" aria-label="Контроли за възпроизвеждане">
+        <button type="button" onClick={() => seekBy(-10)} aria-label="Назад 10 секунди">↶<span>10</span></button>
+        <button type="button" className="mobile-play-toggle" onClick={() => void togglePlayback()} aria-label={isPlaying ? 'Пауза' : 'Пусни'}>{isPlaying ? 'Ⅱ' : '▶'}</button>
+        <button type="button" onClick={() => seekBy(10)} aria-label="Напред 10 секунди">↷<span>10</span></button>
+        <span className="mobile-player-time" aria-live="off">{formatTime(currentTime)} / {formatTime(duration)}</span>
+        <button type="button" onClick={() => void toggleFullscreen()} aria-label="Цял екран">⛶</button>
+      </div>
+      </div>
 
       {audioTracks.length > 1 && (
         <div className="player-controls" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>

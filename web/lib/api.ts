@@ -138,6 +138,7 @@ export interface TitleListItem {
   releaseYear: number | null;
   genres: string[];
   posterPath: string | null;
+  backdropPath: string | null;
   episodeCount: number;
   mediaFileCount: number;
   createdAt: string;

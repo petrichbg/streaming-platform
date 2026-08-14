@@ -75,12 +75,12 @@ export default function TitlePage() {
     return <main className="page detail-state"><Link href="/">← Библиотека</Link><h1>Няма достъп</h1><p className="error">{error}</p></main>;
   }
   if (!title) {
-    return <main className="page detail-state"><div className="detail-skeleton" /></main>;
+    return <main className="page detail-state" aria-busy="true" aria-label="Зареждане на заглавието"><div className="detail-skeleton"><span className="detail-skeleton-poster" /><span className="detail-skeleton-copy"><i /><i /><i /><i /></span></div></main>;
   }
 
   return (
     <main className="detail-page" id="main-content">
-      <div className="detail-backdrop" style={title.posterPath ? { backgroundImage: `url(${API_URL}${title.posterPath})` } : undefined} />
+      <div className="detail-backdrop" style={title.backdropPath ? { backgroundImage: `url(${API_URL}${title.backdropPath})` } : undefined} />
       <nav className="detail-nav"><Link href="/">← Библиотека</Link><span className="eyebrow">Кино у дома</span></nav>
       <section className="detail-hero">
         <div className="detail-poster">
