@@ -160,6 +160,13 @@ jobs:
           cat ../backend-ci.log
           exit 1
 
+      - name: Create bootstrap administrator
+        run: |
+          curl --fail --silent --show-error \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci-admin@streaming.local","password":"CI-Bootstrap-Admin-2608"}' \
+            http://127.0.0.1:3000/auth/register > /dev/null
+
       - name: Run security checks
         working-directory: backend
         run: npm run test:security
