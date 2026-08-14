@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.getHttpAdapter().getInstance().set('trust proxy', 'loopback');
 
   // The web client is served from a different origin (its own dev server, or
   // another host on the LAN), so the browser blocks API calls without this.

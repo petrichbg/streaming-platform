@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import configuration from './config/configuration';
@@ -13,6 +13,7 @@ import { SubtitlesModule } from './subtitles/subtitles.module';
 import { StreamModule } from './stream/stream.module';
 import { MetadataModule } from './metadata/metadata.module';
 import { HealthController } from './health.controller';
+import { AuditMiddleware } from './monitoring/audit.middleware';
 
 @Module({
   imports: [
@@ -40,4 +41,8 @@ import { HealthController } from './health.controller';
   ],
   controllers: [HealthController],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(AuditMiddleware).forRoutes('*');
+  }
+}
