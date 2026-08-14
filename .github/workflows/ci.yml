@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build, typecheck and Prisma validation
+    name: Lint, build and Prisma validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +40,10 @@ jobs:
           npx prisma generate
           npx prisma validate
 
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint
+
       - name: Build backend
         working-directory: backend
         run: npm run build
@@ -52,9 +56,58 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
+      - name: Lint web
+        working-directory: web
+        run: npm run lint
+
       - name: Build web
         working-directory: web
         run: npm run build
+
+      - name: Assemble production build artifact
+        shell: bash
+        run: |
+          mkdir -p production-artifact/backend production-artifact/web/.next
+          cp -R backend/dist backend/prisma production-artifact/backend/
+          cp backend/package.json backend/package-lock.json production-artifact/backend/
+          cp -R web/.next/standalone/. production-artifact/web/
+          cp -R web/.next/static production-artifact/web/.next/static
+          cp web/package.json web/package-lock.json production-artifact/web/
+          printf 'commit=%s\nbuilt_at=%s\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" > production-artifact/BUILD_INFO
+          tar -czf streaming-platform-production.tar.gz production-artifact
+          sha256sum streaming-platform-production.tar.gz > streaming-platform-production.tar.gz.sha256
+
+      - name: Upload production build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: streaming-platform-production-${{ github.sha }}
+          path: |
+            streaming-platform-production.tar.gz
+            streaming-platform-production.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  dependency-security:
+    name: Dependency security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            web/package-lock.json
+
+      - name: Audit backend production dependencies
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit web production dependencies
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
 
   integration:
     name: Migrations, integration and security
@@ -125,3 +178,19 @@ jobs:
       - name: Stop test services
         if: always()
         run: docker compose down --volumes
+
+  quality-gate:
+    name: Quality gate
+    if: always()
+    needs: [build, dependency-security, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency-security.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$DEPENDENCY_RESULT" = success
+          test "$INTEGRATION_RESULT" = success

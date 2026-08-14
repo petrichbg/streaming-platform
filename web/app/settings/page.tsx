@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { api, clearToken } from '@/lib/api';
 
@@ -28,6 +29,7 @@ const statusCopy: Record<Job['status'], { icon: string; label: string }> = {
 };
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [queueStatus, setQueueStatus] = useState<Record<string, number>>({});
@@ -75,7 +77,7 @@ export default function SettingsPage() {
     try {
       await api.post('/auth/change-password', { currentPassword, newPassword });
       clearToken();
-      window.location.assign('/login');
+      router.push('/login');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Паролата не може да бъде сменена.');
       setBusy(null);

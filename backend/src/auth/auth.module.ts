@@ -16,9 +16,13 @@ import { JwtAuthGuard } from './jwt-auth.guard';
             'JWT_SECRET is not set in backend/.env — refusing to start without it.',
           );
         }
+        const expiresIn = config.get<string>('auth.jwtExpiresIn') ?? '7d';
+        if (!/^\d+[smhd]$/.test(expiresIn)) {
+          throw new Error('JWT_EXPIRES_IN must use a value such as 15m, 12h, or 7d.');
+        }
         return {
           secret,
-          signOptions: { expiresIn: config.get<string>('auth.jwtExpiresIn') },
+          signOptions: { expiresIn: expiresIn as `${number}${'s' | 'm' | 'h' | 'd'}` },
         };
       },
       inject: [ConfigService],

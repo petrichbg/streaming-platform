@@ -467,7 +467,6 @@ function TitleCard({ title, profileId }: { title: TitleListItem; profileId: stri
         // Plain <img> rather than next/image: the poster endpoint lives on the
         // API origin, which next/image would need allow-listed for no real
         // benefit on a LAN.
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`${API_URL}${title.posterPath}`}
           alt={title.name}
