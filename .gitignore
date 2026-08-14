@@ -1,0 +1,31 @@
+# Secrets — matches .env at any depth, including backend/.env
+.env
+traefik/certs/*
+!traefik/certs/.gitkeep
+
+# Build output and dependencies — reinstallable, must never be committed
+node_modules/
+dist/
+.next/
+.next.stale-*/
+next-env.d.ts
+*.tsbuildinfo
+*.db
+
+# Next.js local env. The bare ".env" pattern above does NOT match this.
+.env.local
+
+# Local test artifacts
+scripts/gpu-test/out/
+scripts/gpu-test/gpu-test-results.csv
+*.vtt
+# Screenshots and traces from driving the app with Playwright
+.playwright-mcp/
+
+# Media files never belong in the repo. A stray .mkv under backend/src/
+# also makes `nest start --watch` rescan gigabytes on every rebuild.
+*.mkv
+*.mp4
+*.avi
+*.m4v
+*.mov

@@ -1,0 +1,13 @@
+# Points Traefik at the local CA certificate generated with mkcert.
+# See docs/SETUP.md for how to generate these files into traefik/certs/.
+# DOMAIN below must match the DOMAIN value in your .env file.
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/streaming.local.pem
+      keyFile: /etc/traefik/certs/streaming.local-key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/streaming.local.pem
+        keyFile: /etc/traefik/certs/streaming.local-key.pem

@@ -1,0 +1,58 @@
+# Routes for the two host-side services.
+#
+# The backend and the web client run natively on the Windows host, not in
+# Docker: the transcoder needs direct GPU access, so containerising the API
+# was rejected in ARCHITECTURE.md. Traefik therefore cannot discover them
+# through the Docker provider and they are declared here by hand, reaching
+# back out to the host through host.docker.internal.
+#
+# Why this exists at all: every client other than a browser on this machine
+# needs one stable address. Pointing phones and TVs at http://<lan-ip>:3000
+# means hardcoding an address that changes with DHCP, and no TLS. The mkcert
+# certificate covers streaming.local and *.streaming.local, so both names
+# below are already valid.
+#
+# Each device still needs two things once, see docs/SETUP.md:
+#   1. streaming.local and api.streaming.local resolving to this host
+#      (router DNS entry, or the device's hosts file)
+#   2. the mkcert root CA installed and trusted
+
+http:
+  routers:
+    web:
+      rule: "Host(`streaming.local`)"
+      entryPoints: [websecure]
+      service: web
+      tls: {}
+      middlewares: [security-headers]
+
+    api:
+      rule: "Host(`api.streaming.local`)"
+      entryPoints: [websecure]
+      service: api
+      tls: {}
+      middlewares: [security-headers]
+
+  middlewares:
+    security-headers:
+      headers:
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: "same-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+
+  services:
+    web:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3001"
+
+    api:
+      loadBalancer:
+        servers:
+          # Streaming a whole file through the proxy: the default response
+          # buffering would defeat range requests and HLS, so it stays off.
+          - url: "http://host.docker.internal:3000"
+        passHostHeader: true

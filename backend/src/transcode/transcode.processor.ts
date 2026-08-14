@@ -1,0 +1,226 @@
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Job } from 'bullmq';
+import { execFile } from 'child_process';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { PrismaService } from '../prisma/prisma.service';
+import { FfprobeService } from '../media/ffprobe.service';
+import { audioKbpsFor, bitrateBudgetFor } from './bitrates';
+import { AmfEncoder, TRANSCODE_QUEUE, TranscodeJobData } from './transcode.constants';
+
+/**
+ * Target segment length. Segments can only be cut on a keyframe, so the
+ * encoder is told to emit one exactly this often; without that the GOP length
+ * decides the segment length and `-hls_time` is quietly ignored (observed:
+ * 10-second segments against a requested 6).
+ */
+const HLS_SEGMENT_SECONDS = 6;
+
+/** Fallback when the source does not report a frame rate we can parse. */
+const ASSUMED_FPS = 25;
+
+/** Entry point of a rendition: ties the video to the audio track group. */
+export const MASTER_PLAYLIST = 'master.m3u8';
+
+@Processor(TRANSCODE_QUEUE)
+export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
+  private readonly logger = new Logger(TranscodeProcessor.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ffprobe: FfprobeService,
+    private readonly config: ConfigService,
+  ) {
+    super();
+  }
+
+  onModuleInit() {
+    const maxH264 = this.config.get<number>('transcode.maxConcurrentH264Amf') ?? 6;
+    const maxHevc = this.config.get<number>('transcode.maxConcurrentHevcAmf') ?? 6;
+    // Both encoders share the same physical AMF encode block on this GPU
+    // (see docs/ARCHITECTURE.md) and this single worker processes jobs for
+    // both encoder types through one queue, so the safe combined cap is the
+    // smaller of the two tested limits, not their sum -- running 6 h264_amf
+    // and 6 hevc_amf jobs at once was never tested and is not assumed safe.
+    this.worker.concurrency = Math.min(maxH264, maxHevc);
+  }
+
+  async process(job: Job<TranscodeJobData>): Promise<void> {
+    const { transcodeJobId, mediaFileId, encoder, targetHeight } = job.data;
+
+    await this.prisma.transcodeJob.update({
+      where: { id: transcodeJobId },
+      data: { status: 'RUNNING', startedAt: new Date() },
+    });
+
+    try {
+      const outputPath = await this.runFfmpeg(mediaFileId, encoder, targetHeight);
+      await this.prisma.transcodeJob.update({
+        where: { id: transcodeJobId },
+        data: { status: 'DONE', finishedAt: new Date(), outputPath },
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      this.logger.error(`Transcode job ${transcodeJobId} failed: ${message}`);
+      await this.prisma.transcodeJob.update({
+        where: { id: transcodeJobId },
+        data: { status: 'FAILED', finishedAt: new Date(), error: message.slice(0, 2000) },
+      });
+      throw err;
+    }
+  }
+
+  private async runFfmpeg(
+    mediaFileId: string,
+    encoder: AmfEncoder,
+    targetHeight: number,
+  ): Promise<string> {
+    const mediaFile = await this.prisma.mediaFile.findUniqueOrThrow({
+      where: { id: mediaFileId },
+    });
+
+    const mediaRoot = this.config.get<string>('media.root')!;
+    const outputRoot = this.config.get<string>('transcode.outputRoot')!;
+    const sourcePath = path.join(mediaRoot, mediaFile.sourcePath);
+    const outDir = path.join(outputRoot, mediaFileId, `${targetHeight}p`);
+    await fs.mkdir(outDir, { recursive: true });
+    // "%v" is replaced with the variant index: stream_0 is the video, and one
+    // stream_N follows per audio track. Everything lands flat in one directory
+    // so the paths stay easy to validate on the way back out.
+    const playlistPattern = path.join(outDir, 'stream_%v.m3u8');
+    const segmentPattern = path.join(outDir, 'stream_%v_%05d.ts');
+    const masterPath = path.join(outDir, MASTER_PLAYLIST);
+
+    // Probed once, for three reasons: pixel format, frame rate (to size the
+    // GOP) and the audio track list.
+    const probe = await this.ffprobe.probe(sourcePath);
+    const videoStream = probe.streams.find((s) => s.codec_type === 'video');
+    const audioStreams = probe.streams.filter((s) => s.codec_type === 'audio');
+
+    // h264_amf (like most hardware H.264 encoders) only accepts 8-bit input.
+    // Downsample 10-bit sources before encoding -- discovered the hard way in
+    // scripts/gpu-test/test-amf-capacity.ps1, see docs/ARCHITECTURE.md.
+    const videoFilters: string[] = [];
+    if (encoder === 'h264_amf' && videoStream && this.ffprobe.isHighBitDepth(videoStream)) {
+      videoFilters.push('format=nv12');
+    }
+    videoFilters.push(`scale=-2:${targetHeight}`);
+
+    const budget = bitrateBudgetFor(encoder, targetHeight);
+    const gopFrames = Math.round(parseFrameRate(videoStream?.r_frame_rate) * HLS_SEGMENT_SECONDS);
+
+    // Every audio track is carried, not just the first. Bulgarian releases
+    // routinely ship BG audio alongside the original, and keeping only track
+    // zero silently picked one for the viewer.
+    const audioMaps: string[] = [];
+    const audioRates: string[] = [];
+    // The video is variant 0; audio variants follow in the same order as the
+    // -map arguments.
+    const variants = ['v:0,agroup:aud'];
+
+    audioStreams.forEach((stream, index) => {
+      audioMaps.push('-map', `0:a:${index}`);
+      audioRates.push(`-b:a:${index}`, `${audioKbpsFor(stream.channels)}k`);
+      variants.push(
+        [
+          `a:${index}`,
+          'agroup:aud',
+          `language:${languageTagFor(stream)}`,
+          // Something has to be the default or players pick unpredictably.
+          ...(index === 0 ? ['default:yes'] : []),
+        ].join(','),
+      );
+    });
+
+    const args = [
+      '-y',
+      '-i', sourcePath,
+      // Explicit stream selection. Without -map, ffmpeg's default selection
+      // also hands subtitle streams to the HLS muxer, which then emits
+      // WebVTT segments (index0.vtt, index1.vtt, ...) instead of the video
+      // playlist -- observed on a source with embedded subrip tracks.
+      // Subtitles are served separately by SubtitlesModule, so they are
+      // deliberately excluded here. The trailing "?" makes audio optional so
+      // a silent source does not fail the whole job.
+      '-map', '0:v:0',
+      ...audioMaps,
+      '-sn',
+      '-vf', videoFilters.join(','),
+      '-c:v', encoder,
+      '-quality', 'balanced',
+      // Without an explicit rate control mode AMF chooses its own target and
+      // it is enormous -- see bitrates.ts for the measurement. "vbr_peak" is
+      // the one mode whose numeric id is the same for h264_amf and hevc_amf,
+      // so passing it by name is safe for both.
+      '-rc', 'vbr_peak',
+      '-b:v', `${budget.videoKbps}k`,
+      '-maxrate', `${budget.maxrateKbps}k`,
+      '-bufsize', `${budget.bufsizeKbps}k`,
+      // Variance-based adaptive quantisation: spends bits on flat areas where
+      // banding shows instead of on detail that hides it.
+      '-vbaq', '1',
+      // A segment can only start on a keyframe. Pinning the GOP to the segment
+      // length is what actually makes -hls_time below take effect.
+      '-g', String(gopFrames),
+      '-keyint_min', String(gopFrames),
+      '-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+      '-c:a', 'aac',
+      ...audioRates,
+      // Splits the output into one playlist per stream and writes a master
+      // that ties the audio group to the video. Without this the tracks are
+      // muxed together and the player has nothing to switch between.
+      '-var_stream_map', variants.join(' '),
+      '-master_pl_name', MASTER_PLAYLIST,
+      '-f', 'hls',
+      '-hls_time', String(HLS_SEGMENT_SECONDS),
+      '-hls_playlist_type', 'vod',
+      '-hls_segment_filename', segmentPattern,
+      playlistPattern,
+    ];
+
+    await new Promise<void>((resolve, reject) => {
+      execFile('ffmpeg', args, { maxBuffer: 20 * 1024 * 1024 }, (error, _stdout, stderr) => {
+        if (!error) return resolve();
+
+        // execFile's own message is just the command line, so a failed job
+        // used to land in the database saying nothing about why. ffmpeg
+        // explains itself on stderr; keep the tail of it, and put it first
+        // because the stored error is truncated to 2000 characters.
+        const reason = stderr.trim().split(/\r?\n/).slice(-12).join('\n');
+        this.logger.error(`ffmpeg failed for ${masterPath}\n${stderr.trim().slice(-4000)}`);
+        reject(new Error(`ffmpeg failed: ${reason || error.message}`));
+      });
+    });
+
+    return masterPath;
+  }
+}
+
+/**
+ * Language tag for a stream, constrained to what a language code may look
+ * like. It only reaches the master playlist's metadata, never a filename --
+ * variants are named by index for exactly that reason -- but it still comes
+ * from tags inside an arbitrary media file, so it is not passed through raw.
+ */
+function languageTagFor(stream: { tags?: Record<string, string> }): string {
+  const tag = stream.tags?.language ?? stream.tags?.LANGUAGE ?? '';
+  return /^[A-Za-z]{2,3}$/.test(tag) ? tag.toLowerCase() : 'und';
+}
+
+/**
+ * ffprobe reports frame rates as fractions ("24000/1001" for 23.976), so this
+ * cannot just be Number(). Falls back to a sane rate rather than throwing: an
+ * unparsable frame rate should cost a slightly-off GOP length, not the job.
+ */
+function parseFrameRate(rate: string | undefined): number {
+  if (!rate) return ASSUMED_FPS;
+
+  const [numerator, denominator] = rate.split('/').map(Number);
+  if (!Number.isFinite(numerator) || numerator <= 0) return ASSUMED_FPS;
+  if (denominator === undefined) return numerator;
+  if (!Number.isFinite(denominator) || denominator <= 0) return ASSUMED_FPS;
+
+  return numerator / denominator;
+}

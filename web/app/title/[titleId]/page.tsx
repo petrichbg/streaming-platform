@@ -1,0 +1,128 @@
+'use client';
+
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  API_URL,
+  ApiError,
+  api,
+  clearToken,
+  getSelectedProfileId,
+  getToken,
+  type MediaFile,
+  type TitleDetail,
+} from '@/lib/api';
+
+export default function TitlePage() {
+  const { titleId } = useParams<{ titleId: string }>();
+  const router = useRouter();
+  const [title, setTitle] = useState<TitleDetail | null>(null);
+  const [inWatchlist, setInWatchlist] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [season, setSeason] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const profileId = getSelectedProfileId();
+
+  useEffect(() => {
+    if (!getToken()) {
+      router.replace('/login');
+      return;
+    }
+    let cancelled = false;
+    const suffix = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+    Promise.all([
+      api.get<TitleDetail>(`/titles/${titleId}${suffix}`),
+      profileId ? api.get<Array<{ titleId: string }>>(`/profiles/${profileId}/watchlist`) : [],
+    ]).then(([detail, watchlist]) => {
+      if (cancelled) return;
+      setTitle(detail);
+      setInWatchlist(Array.isArray(watchlist) && watchlist.some((item) => item.titleId === titleId));
+    }).catch((err) => {
+      if (err instanceof ApiError && err.status === 401) {
+        clearToken();
+        router.replace('/login');
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Заглавието не може да се зареди.');
+    });
+    return () => { cancelled = true; };
+  }, [profileId, router, titleId]);
+
+  const firstMedia = useMemo(
+    () => title?.mediaFiles[0] ?? title?.episodes[0]?.mediaFiles[0] ?? null,
+    [title],
+  );
+  const seasons = useMemo(() => Array.from(new Set(title?.episodes.map((episode) => episode.seasonNumber) ?? [])).sort((a, b) => a - b), [title]);
+  const activeSeason = season ?? seasons[0] ?? null;
+  const visibleEpisodes = title?.episodes.filter((episode) => activeSeason === null || episode.seasonNumber === activeSeason) ?? [];
+
+  async function toggleWatchlist() {
+    if (!profileId) return;
+    setBusy(true);
+    try {
+      if (inWatchlist) await api.delete(`/profiles/${profileId}/watchlist/${titleId}`);
+      else await api.post(`/profiles/${profileId}/watchlist`, { titleId });
+      setInWatchlist(!inWatchlist);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Списъкът не може да се обнови.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !title) {
+    return <main className="page detail-state"><Link href="/">← Библиотека</Link><h1>Няма достъп</h1><p className="error">{error}</p></main>;
+  }
+  if (!title) {
+    return <main className="page detail-state"><div className="detail-skeleton" /></main>;
+  }
+
+  return (
+    <main className="detail-page" id="main-content">
+      <div className="detail-backdrop" style={title.posterPath ? { backgroundImage: `url(${API_URL}${title.posterPath})` } : undefined} />
+      <nav className="detail-nav"><Link href="/">← Библиотека</Link><span className="eyebrow">Кино у дома</span></nav>
+      <section className="detail-hero">
+        <div className="detail-poster">
+          {title.posterPath ? <img src={`${API_URL}${title.posterPath}`} alt={`Постер на ${title.name}`} /> : <div>Без постер</div>}
+        </div>
+        <div className="detail-copy">
+          <span className="eyebrow">{title.type === 'SERIES' ? 'Сериал' : 'Филм'}</span>
+          <h1>{title.name}</h1>
+          <div className="detail-facts">
+            {title.releaseYear && <span>{title.releaseYear}</span>}
+            {title.rating && <span className="rating-chip">{title.rating}</span>}
+            {title.genres.map((genre) => <span key={genre}>{genre}</span>)}
+          </div>
+          {title.overview && <p>{title.overview}</p>}
+          <div className="detail-actions">
+            <button disabled={!firstMedia} onClick={() => firstMedia && router.push(`/watch/${firstMedia.id}`)}><span aria-hidden="true">▶</span> Гледай</button>
+            {profileId && <button className="secondary-button" disabled={busy} onClick={toggleWatchlist}>{inWatchlist ? '✓ В моя списък' : '+ Моят списък'}</button>}
+          </div>
+          {error && <p className="error">{error}</p>}
+        </div>
+      </section>
+
+      {title.episodes.length > 0 && (
+        <section className="episodes-section">
+          <div className="section-heading"><span className="eyebrow">Всички епизоди</span><h2>Сезони и епизоди</h2></div>
+          {seasons.length > 1 && <div className="season-tabs" role="tablist" aria-label="Сезони">{seasons.map((number) => <button role="tab" aria-selected={activeSeason === number} className={activeSeason === number ? 'active' : ''} key={number} onClick={() => setSeason(number)}>Сезон {number}</button>)}</div>}
+          <div className="episode-list">
+            {visibleEpisodes.map((episode) => <EpisodeRow key={episode.id} episode={episode} onPlay={(media) => router.push(`/watch/${media.id}`)} />)}
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
+
+function EpisodeRow({ episode, onPlay }: { episode: TitleDetail['episodes'][number]; onPlay: (media: MediaFile) => void }) {
+  const media = episode.mediaFiles[0];
+  return (
+    <article className="episode-row">
+      <span className="episode-number">С{episode.seasonNumber}<br />Е{episode.episodeNumber}</span>
+      <div><strong>{episode.name || `Епизод ${episode.episodeNumber}`}</strong><span>{media?.durationSec ? `${Math.round(media.durationSec / 60)} мин.` : 'Продължителност неизвестна'}</span></div>
+      <button className="secondary-button" disabled={!media} onClick={() => media && onPlay(media)}>▶</button>
+    </article>
+  );
+}

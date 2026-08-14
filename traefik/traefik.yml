@@ -1,0 +1,27 @@
+api:
+  dashboard: true
+  # Phase 0 only: dashboard reachable at :8080 with no auth in front of it.
+  # This is acceptable while the stack is only reachable inside your locked LAN,
+  # but revisit before opening this network to more devices/users.
+  insecure: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    exposedByDefault: false
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+log:
+  level: INFO
