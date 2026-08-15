@@ -14,6 +14,9 @@ import { StreamModule } from './stream/stream.module';
 import { MetadataModule } from './metadata/metadata.module';
 import { HealthController } from './health.controller';
 import { AuditMiddleware } from './monitoring/audit.middleware';
+import { AdminModule } from './admin/admin.module';
+import { RateLimitMiddleware } from './monitoring/rate-limit.middleware';
+import { DevicePairingModule } from './device-pairing/device-pairing.module';
 
 @Module({
   imports: [
@@ -38,11 +41,13 @@ import { AuditMiddleware } from './monitoring/audit.middleware';
     SubtitlesModule,
     StreamModule,
     MetadataModule,
+    AdminModule,
+    DevicePairingModule,
   ],
   controllers: [HealthController],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(AuditMiddleware).forRoutes('*');
+    consumer.apply(RateLimitMiddleware, AuditMiddleware).forRoutes('*');
   }
 }

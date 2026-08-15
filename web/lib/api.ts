@@ -113,6 +113,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return JSON.parse(body) as T;
 }
 
+async function upload<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form });
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try { const body = await response.json(); if (body?.message) message = String(body.message); } catch { /* keep fallback */ }
+    throw new ApiError(message, response.status);
+  }
+  return response.json() as Promise<T>;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) =>
@@ -122,6 +135,7 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload,
 };
 
 // ---------------------------------------------------------------- API types
@@ -151,19 +165,29 @@ export interface MediaFile {
   container: string | null;
   videoCodec: string | null;
   durationSec: number | null;
+  quality: string | null;
+  audioLanguages: string[];
+  subtitleLanguages: string[];
+  hdrFormat: string | null;
 }
 
 export interface TitleDetail extends Omit<TitleListItem, 'episodeCount' | 'mediaFileCount'> {
   overview: string | null;
   rating: string | null;
+  cast: string[];
+  director: string | null;
+  trailerKey: string | null;
   mediaFiles: MediaFile[];
   episodes: Array<{
     id: string;
     seasonNumber: number;
     episodeNumber: number;
     name: string | null;
+    overview: string | null;
+    stillPath: string | null;
     mediaFiles: MediaFile[];
   }>;
+  related: TitleListItem[];
 }
 
 export interface Rendition {
@@ -222,4 +246,10 @@ export interface SubtitleTrackInfo {
   forced?: boolean;
   /** False for bitmap formats (PGS/VobSub) that cannot become WebVTT. */
   convertible: boolean;
+  bitmap?: boolean;
+  bitmapHandling?: 'none' | 'burn-in';
+  source?: 'embedded' | 'external';
+  fileName?: string;
+  encoding?: 'utf-8' | 'windows-1251';
+  matchConfidence?: number;
 }

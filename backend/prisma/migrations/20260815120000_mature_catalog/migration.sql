@@ -1,0 +1,7 @@
+ALTER TABLE "Title"
+  ADD COLUMN "tmdbId" INTEGER,
+  ADD COLUMN "cast" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  ADD COLUMN "director" TEXT,
+  ADD COLUMN "trailerKey" TEXT;
+
+ALTER TABLE "Episode" ADD COLUMN "stillPath" TEXT;

@@ -95,9 +95,15 @@ export default function TitlePage() {
             {title.genres.map((genre) => <span key={genre}>{genre}</span>)}
           </div>
           {title.overview && <p>{title.overview}</p>}
+          {(title.director || title.cast.length > 0) && <dl className="title-credits">
+            {title.director && <><dt>Режисьор</dt><dd>{title.director}</dd></>}
+            {title.cast.length > 0 && <><dt>В ролите</dt><dd>{title.cast.slice(0, 7).join(', ')}</dd></>}
+          </dl>}
+          <MediaBadges media={firstMedia} />
           <div className="detail-actions">
             <button disabled={!firstMedia} onClick={() => firstMedia && router.push(`/watch/${firstMedia.id}`)}><span aria-hidden="true">▶</span> Гледай</button>
             {profileId && <button className="btn btn-outline-light btn-lg secondary-button" disabled={busy} onClick={toggleWatchlist}>{inWatchlist ? '✓ В моя списък' : '+ Моят списък'}</button>}
+            {title.trailerKey && <a className="btn btn-outline-light btn-lg secondary-button" href={`https://www.youtube.com/watch?v=${title.trailerKey}`} target="_blank" rel="noreferrer">Трейлър ↗</a>}
           </div>
           {error && <div className="alert alert-danger">{error}</div>}
         </div>
@@ -112,6 +118,7 @@ export default function TitlePage() {
           </div>
         </section>
       )}
+      {title.related.length > 0 && <section className="related-section"><div className="section-heading"><span className="eyebrow">Подбрано за теб</span><h2>Свързани заглавия</h2></div><div className="related-grid">{title.related.map((item) => <Link href={`/title/${item.id}`} key={item.id} className="related-card">{item.posterPath ? <img src={`${API_URL}${item.posterPath}`} alt="" /> : <span />}<strong>{item.name}</strong><small>{item.releaseYear ? `${item.releaseYear} · ` : ''}{item.type === 'SERIES' ? 'Сериал' : 'Филм'}</small></Link>)}</div></section>}
     </main>
   );
 }
@@ -121,8 +128,25 @@ function EpisodeRow({ episode, onPlay }: { episode: TitleDetail['episodes'][numb
   return (
     <article className="episode-row">
       <span className="episode-number">С{episode.seasonNumber}<br />Е{episode.episodeNumber}</span>
-      <div><strong>{episode.name || `Епизод ${episode.episodeNumber}`}</strong><span>{media?.durationSec ? `${Math.round(media.durationSec / 60)} мин.` : 'Продължителност неизвестна'}</span></div>
+      <div className="episode-thumbnail">{episode.stillPath ? <img src={`${API_URL}${episode.stillPath}`} alt="" /> : titlePreview(media)}</div>
+      <div><strong>{episode.name || `Епизод ${episode.episodeNumber}`}</strong><span>{media?.durationSec ? `${Math.round(media.durationSec / 60)} мин.` : 'Продължителност неизвестна'}</span>{episode.overview && <p>{episode.overview}</p>}<MediaBadges media={media} /></div>
       <button className="btn btn-outline-light secondary-button" disabled={!media} onClick={() => media && onPlay(media)}>▶</button>
     </article>
   );
+}
+
+function titlePreview(media?: MediaFile) {
+  return media ? <img src={`${API_URL}/stream/${media.id}/preview/thumb_00001.jpg?token=${encodeURIComponent(getToken() ?? '')}`} alt="" onError={(event) => { event.currentTarget.style.display = 'none'; }} /> : <span />;
+}
+
+function MediaBadges({ media }: { media?: MediaFile | null }) {
+  if (!media) return null;
+  const audio = media.audioLanguages.length;
+  const subtitles = media.subtitleLanguages.length;
+  return <div className="media-badges">
+    {media.quality && <span>{media.quality}</span>}
+    {media.hdrFormat && <span>{media.hdrFormat}</span>}
+    {audio > 0 && <span>{audio} аудио</span>}
+    {subtitles > 0 && <span>{subtitles} субтитри</span>}
+  </div>;
 }

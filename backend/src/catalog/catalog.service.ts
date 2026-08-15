@@ -67,10 +67,10 @@ export class CatalogService {
     const title = await this.prisma.title.findUnique({
       where: { id },
       include: {
-        mediaFiles: true,
+        mediaFiles: { include: { transcodeJobs: { where: { status: 'DONE' } } } },
         episodes: {
           orderBy: [{ seasonNumber: 'asc' }, { episodeNumber: 'asc' }],
-          include: { mediaFiles: true },
+          include: { mediaFiles: { include: { transcodeJobs: { where: { status: 'DONE' } } } } },
         },
       },
     });
@@ -85,6 +85,53 @@ export class CatalogService {
       throw new NotFoundException(`Title ${id} not found`);
     }
 
-    return title;
+    const candidates = await this.prisma.title.findMany({
+      where: { id: { not: id } },
+      include: { _count: { select: { episodes: true, mediaFiles: true, watchProgress: true, watchlist: true } } },
+      take: 60,
+    });
+    const related = candidates
+      .filter((candidate) => isRatingAllowed(candidate.rating, maxRating))
+      .map((candidate) => ({
+        candidate,
+        score: candidate.genres.filter((genre) => title.genres.includes(genre)).length * 4
+          + (candidate.type === title.type ? 2 : 0)
+          + candidate._count.watchProgress + candidate._count.watchlist,
+      }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map(({ candidate }) => ({
+        id: candidate.id, type: candidate.type, name: candidate.name,
+        releaseYear: candidate.releaseYear, genres: candidate.genres,
+        posterPath: candidate.posterPath, backdropPath: candidate.backdropPath,
+        episodeCount: candidate._count.episodes, mediaFileCount: candidate._count.mediaFiles,
+        createdAt: candidate.createdAt,
+        popularity: candidate._count.watchProgress + candidate._count.watchlist,
+      }));
+
+    return {
+      ...title,
+      mediaFiles: title.mediaFiles.map(toCatalogMedia),
+      episodes: title.episodes.map((episode) => ({ ...episode, mediaFiles: episode.mediaFiles.map(toCatalogMedia) })),
+      related,
+    };
   }
+}
+
+function toCatalogMedia(media: any) {
+  const audioTracks = Array.isArray(media.audioTracks) ? media.audioTracks : [];
+  const subtitleTracks = Array.isArray(media.subtitleTracks) ? media.subtitleTracks : [];
+  const maxHeight = Math.max(0, ...media.transcodeJobs.map((job: any) => job.targetHeight));
+  return {
+    id: media.id,
+    sourcePath: media.sourcePath,
+    container: media.container,
+    videoCodec: media.videoCodec,
+    durationSec: media.durationSec,
+    quality: maxHeight ? `${maxHeight}p` : null,
+    audioLanguages: [...new Set(audioTracks.map((track: any) => track.language).filter(Boolean))],
+    subtitleLanguages: [...new Set(subtitleTracks.map((track: any) => track.language).filter(Boolean))],
+    hdrFormat: null,
+  };
 }

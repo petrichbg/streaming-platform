@@ -44,6 +44,10 @@ jobs:
         working-directory: backend
         run: npm run lint
 
+      - name: Unit tests
+        working-directory: backend
+        run: npm run test:unit
+
       - name: Build backend
         working-directory: backend
         run: npm run build
@@ -186,10 +190,103 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  e2e:
+    name: Playwright critical playback journey
+    runs-on: ubuntu-latest
+    env:
+      DOMAIN: streaming.local
+      POSTGRES_USER: streaming
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: streaming
+      REDIS_PASSWORD: changeme
+      DATABASE_URL: postgresql://streaming:changeme@127.0.0.1:5432/streaming
+      REDIS_URL: redis://:changeme@127.0.0.1:6379
+      JWT_SECRET: ci-only-secret-with-at-least-32-characters
+      MEDIA_ROOT: /tmp/streaming-media
+      POSTER_ROOT: /tmp/streaming-posters
+      TRANSCODE_OUTPUT_ROOT: /tmp/streaming-transcoded
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3000
+      E2E_API_URL: http://127.0.0.1:3000
+      E2E_WEB_URL: http://127.0.0.1:3001
+      E2E_EMAIL: e2e@streaming.local
+      E2E_PASSWORD: E2E-Streaming-2608
+      E2E_MEDIA_ID: 22000000-0000-0000-0000-000000000001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            web/package-lock.json
+      - name: Start infrastructure and create media fixture
+        run: |
+          cp .env.example .env
+          mkdir -p /tmp/streaming-media/e2e /tmp/streaming-posters /tmp/streaming-transcoded
+          docker compose up -d postgres redis
+          sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=640x360:rate=25 -f lavfi -i sine=frequency=440 -t 12 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/streaming-media/e2e/test.mp4
+          printf '1\n00:00:01,000 --> 00:00:05,000\nТестови български субтитри\n' > /tmp/streaming-media/e2e/test.bg.srt
+      - name: Build API and apply migrations
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma generate
+          npx prisma migrate deploy
+          npm run build
+      - name: Seed playback fixture
+        run: |
+          docker exec -i streaming-postgres psql -v ON_ERROR_STOP=1 -U streaming -d streaming <<'SQL'
+          INSERT INTO "Title" (id,type,name,"releaseYear",rating,genres,"createdAt","updatedAt","cast")
+          VALUES ('11000000-0000-0000-0000-000000000001','MOVIE','E2E Playback Fixture',2026,'PG-13',ARRAY['Test'],NOW(),NOW(),ARRAY[]::TEXT[]);
+          INSERT INTO "MediaFile" (id,"titleId","sourcePath",container,"videoCodec","audioTracks","subtitleTracks","durationSec","importedAt")
+          VALUES ('22000000-0000-0000-0000-000000000001','11000000-0000-0000-0000-000000000001','e2e/test.mp4','mp4','h264','[{"codec":"aac","language":"eng"}]'::jsonb,'[]'::jsonb,12,NOW());
+          SQL
+      - name: Start API
+        working-directory: backend
+        run: |
+          npm run start:prod > ../backend-e2e.log 2>&1 &
+          for attempt in {1..30}; do curl --fail --silent http://127.0.0.1:3000/health >/dev/null && exit 0; sleep 1; done
+          cat ../backend-e2e.log
+          exit 1
+      - name: Build and start web
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          npm run start > ../web-e2e.log 2>&1 &
+          for attempt in {1..30}; do curl --fail --silent http://127.0.0.1:3001/login >/dev/null && break; sleep 1; done
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run critical E2E journey
+        working-directory: web
+        run: npm run test:e2e
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.sha }}
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          cat backend-e2e.log || true
+          cat web-e2e.log || true
+          docker compose logs postgres redis || true
+      - name: Stop test services
+        if: always()
+        run: docker compose down --volumes
+
   quality-gate:
     name: Quality gate
     if: always()
-    needs: [build, dependency-security, integration]
+    needs: [build, dependency-security, integration, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to succeed
@@ -197,7 +294,9 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           DEPENDENCY_RESULT: ${{ needs.dependency-security.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           test "$BUILD_RESULT" = success
           test "$DEPENDENCY_RESULT" = success
           test "$INTEGRATION_RESULT" = success
+          test "$E2E_RESULT" = success
