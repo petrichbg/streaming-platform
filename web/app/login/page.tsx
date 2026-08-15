@@ -21,7 +21,8 @@ export default function LoginPage() {
       // account's selected profile into the new session.
       clearToken();
       setToken(result.accessToken);
-      router.push('/select-profile');
+      const requested = new URLSearchParams(window.location.search).get('next');
+      router.push(requested?.startsWith('/') && !requested.startsWith('//') ? requested : '/select-profile');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

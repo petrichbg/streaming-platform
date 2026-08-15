@@ -25,9 +25,18 @@ export interface ScanStats {
   failed: number;
 }
 
+export interface MediaAuditReport {
+  checked: number;
+  missing: Array<{ id: string; sourcePath: string }>;
+  corrupt: Array<{ id: string; sourcePath: string; error: string }>;
+  duplicateCandidates: Array<{ sizeBytes: number; durationSec: number | null; files: Array<{ id: string; sourcePath: string }> }>;
+  orphanTitles: Array<{ id: string; name: string }>;
+}
+
 @Injectable()
 export class MediaScannerService {
   private readonly logger = new Logger(MediaScannerService.name);
+  private activeScan: Promise<ScanStats> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -35,7 +44,13 @@ export class MediaScannerService {
     private readonly config: ConfigService,
   ) {}
 
-  async scan(): Promise<ScanStats> {
+  scan(): Promise<ScanStats> {
+    if (this.activeScan) return this.activeScan;
+    this.activeScan = this.runScan().finally(() => { this.activeScan = null; });
+    return this.activeScan;
+  }
+
+  private async runScan(): Promise<ScanStats> {
     const mediaRoot = this.config.get<string>('media.root')!;
     const stats: ScanStats = { scanned: 0, imported: 0, skipped: 0, failed: 0 };
 
@@ -69,6 +84,33 @@ export class MediaScannerService {
     }
 
     return stats;
+  }
+
+  async audit(deep = false): Promise<MediaAuditReport> {
+    const mediaRoot = this.config.get<string>('media.root')!;
+    const files = await this.prisma.mediaFile.findMany({ select: { id: true, sourcePath: true, durationSec: true } });
+    const report: MediaAuditReport = { checked: files.length, missing: [], corrupt: [], duplicateCandidates: [], orphanTitles: [], };
+    const groups = new Map<string, Array<{ id: string; sourcePath: string }>>();
+    for (const file of files) {
+      const fullPath = path.join(mediaRoot, file.sourcePath);
+      try {
+        const info = await fs.stat(fullPath);
+        const key = `${info.size}:${file.durationSec ?? 'unknown'}`;
+        groups.set(key, [...(groups.get(key) ?? []), { id: file.id, sourcePath: file.sourcePath }]);
+        if (deep) {
+          try {
+            const probe = await this.ffprobe.probe(fullPath);
+            if (!probe.streams.some((stream) => stream.codec_type === 'video')) throw new Error('No video stream');
+          } catch (error) { report.corrupt.push({ id: file.id, sourcePath: file.sourcePath, error: (error as Error).message.slice(0, 500) }); }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') report.missing.push({ id: file.id, sourcePath: file.sourcePath });
+        else report.corrupt.push({ id: file.id, sourcePath: file.sourcePath, error: (error as Error).message.slice(0, 500) });
+      }
+    }
+    report.duplicateCandidates = [...groups.entries()].filter(([, group]) => group.length > 1).map(([key, group]) => ({ sizeBytes: Number(key.split(':')[0]), durationSec: key.endsWith(':unknown') ? null : Number(key.split(':')[1]), files: group }));
+    report.orphanTitles = await this.prisma.title.findMany({ where: { mediaFiles: { none: {} }, episodes: { none: {} } }, select: { id: true, name: true } });
+    return report;
   }
 
   /**

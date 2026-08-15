@@ -38,7 +38,9 @@ export class MetadataService {
    */
   async refreshAll(force = false): Promise<RefreshStats> {
     const titles = await this.prisma.title.findMany({
-      where: force ? {} : { rating: null },
+      // tmdbId was introduced with the richer catalogue. This also backfills
+      // credits and trailers for titles enriched by older versions.
+      where: force ? {} : { OR: [{ rating: null }, { tmdbId: null }] },
       select: { id: true },
     });
 
@@ -134,6 +136,10 @@ export class MetadataService {
         releaseYear: match.releaseYear ?? title.releaseYear,
         rating,
         genres: match.genres,
+        tmdbId: match.tmdbId,
+        cast: match.cast,
+        director: match.director,
+        trailerKey: match.trailerKey,
         posterPath: posterSaved ? `/metadata/posters/${titleId}.jpg` : title.posterPath,
         backdropPath: backdropSaved ? `/metadata/backdrops/${titleId}.jpg` : title.backdropPath,
       },

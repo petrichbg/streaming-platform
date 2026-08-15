@@ -1,19 +1,25 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { PrismaService } from '../prisma/prisma.service';
 
 const ABANDONED_MS = 60 * 60 * 1000;
 
 @Injectable()
-export class HlsCleanupService implements OnModuleInit {
+export class HlsCleanupService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(HlsCleanupService.name);
+  private timer?: NodeJS.Timeout;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(private readonly config: ConfigService, private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
     await this.cleanupAbandoned();
+    this.timer = setInterval(() => void this.cleanupAbandoned().catch((error) => this.logger.error(`Scheduled HLS cleanup failed: ${error.message}`)), 60 * 60_000);
+    this.timer.unref();
   }
+
+  onApplicationShutdown() { if (this.timer) clearInterval(this.timer); }
 
   finalDir(mediaFileId: string, height: number) {
     return path.join(this.root(), mediaFileId, `${height}p`);
@@ -80,6 +86,15 @@ export class HlsCleanupService implements OnModuleInit {
     for (const mediaDir of mediaDirs) {
       if (!mediaDir.isDirectory() || !/^[0-9a-f-]{36}$/i.test(mediaDir.name)) continue;
       const parent = path.join(root, mediaDir.name);
+      const mediaExists = await this.prisma.mediaFile.count({ where: { id: mediaDir.name } });
+      if (!mediaExists) {
+        const info = await fs.stat(parent);
+        if (Date.now() - info.mtimeMs >= 7 * 24 * 60 * 60_000) {
+          await fs.rm(parent, { recursive: true, force: true });
+          this.logger.warn(`Removed orphan HLS directory ${parent}`);
+        }
+        continue;
+      }
       for (const entry of await fs.readdir(parent, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const dir = path.join(parent, entry.name);

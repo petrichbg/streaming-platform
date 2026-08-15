@@ -12,6 +12,28 @@ Start here:
 - [`docs/SETUP.md`](docs/SETUP.md) — Phase 0 setup steps for this
   Windows 11 Pro server (Docker stack, local CA, GPU capacity test).
 
+## Quick install and service control
+
+Windows (run Command Prompt or PowerShell as Administrator):
+
+```powershell
+install-windows.cmd
+start-all.cmd
+stop-all.cmd
+```
+
+Debian/Ubuntu:
+
+```bash
+chmod +x install-linux.sh start-all.sh stop-all.sh
+sudo ./install-linux.sh
+./start-all.sh
+./stop-all.sh
+```
+
+The installers preserve existing environment files. `stop-all` stops the
+containers without deleting persistent PostgreSQL or Redis volumes.
+
 ## Current phase
 
 **End of Phase 3.** Phases 0-2 are done and Phase 3 is all but finished:

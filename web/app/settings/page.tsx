@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, clearToken } from '@/lib/api';
+import { api, clearToken, type SubtitleTrackInfo, type TitleDetail, type TitleListItem } from '@/lib/api';
+import AdminOpsCenter from './AdminOpsCenter';
 
 interface SessionUser { sub: string; email: string; isAdmin: boolean; profileId?: string }
 interface AdminUser {
@@ -14,6 +15,7 @@ interface AdminUser {
   sessionVersion: number;
   _count: { profiles: number };
 }
+interface LoginSession { id: string; userId: string; userAgent: string | null; ipAddress: string | null; createdAt: string; expiresAt: string; user: { email: string } }
 interface AdminOverview {
   status: 'ok';
   checkedAt: string;
@@ -49,6 +51,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [sessions, setSessions] = useState<LoginSession[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [queueStatus, setQueueStatus] = useState<Record<string, number>>({});
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -59,19 +62,111 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [titles, setTitles] = useState<TitleListItem[]>([]);
+  const [subtitleTitleId, setSubtitleTitleId] = useState('');
+  const [subtitleMediaId, setSubtitleMediaId] = useState('');
+  const [subtitleMedia, setSubtitleMedia] = useState<TitleDetail | null>(null);
+  const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrackInfo[]>([]);
+  const [subtitleFile, setSubtitleFile] = useState<File | null>(null);
+  const [subtitleLanguage, setSubtitleLanguage] = useState('bul');
+  const [subtitleForced, setSubtitleForced] = useState(false);
+  const [subtitleEditIndex, setSubtitleEditIndex] = useState<number | null>(null);
+  const [subtitleEditContent, setSubtitleEditContent] = useState('');
+  const [subtitleCapabilities, setSubtitleCapabilities] = useState<{ burnInFilterAvailable: boolean; ocrAvailable: boolean; bitmapPlaybackAvailable: boolean; bitmapReason: string } | null>(null);
 
   const loadAdmin = useCallback(async (includeUsers = false) => {
-    const [recent, status, summary, accounts] = await Promise.all([
+    const [recent, status, summary, accounts, catalogTitles, activeSessions] = await Promise.all([
       api.get<Job[]>('/transcode/jobs'),
       api.get<{ queue: Record<string, number> }>('/transcode/status'),
       api.get<AdminOverview>('/admin/overview'),
       includeUsers ? api.get<AdminUser[]>('/auth/users') : Promise.resolve(null),
+      includeUsers ? api.get<TitleListItem[]>('/titles') : Promise.resolve(null),
+      includeUsers ? api.get<LoginSession[]>('/auth/sessions') : Promise.resolve(null),
     ]);
     setJobs(recent);
     setQueueStatus(status.queue);
     setOverview(summary);
     if (accounts) setUsers(accounts);
+    if (catalogTitles) setTitles(catalogTitles);
+    if (activeSessions) setSessions(activeSessions);
   }, []);
+
+  async function chooseSubtitleTitle(titleId: string) {
+    setSubtitleTitleId(titleId);
+    setSubtitleMediaId('');
+    setSubtitleTracks([]);
+    setSubtitleMedia(titleId ? await api.get<TitleDetail>(`/titles/${titleId}`) : null);
+  }
+
+  async function chooseSubtitleMedia(mediaId: string) {
+    setSubtitleMediaId(mediaId);
+    if (!mediaId) { setSubtitleTracks([]); setSubtitleCapabilities(null); return; }
+    const [tracks, capabilities] = await Promise.all([
+      api.get<SubtitleTrackInfo[]>(`/media/${mediaId}/subtitles`),
+      api.get<{ burnInFilterAvailable: boolean; ocrAvailable: boolean; bitmapPlaybackAvailable: boolean; bitmapReason: string }>(`/media/${mediaId}/subtitles/capabilities`),
+    ]);
+    setSubtitleTracks(tracks); setSubtitleCapabilities(capabilities);
+  }
+
+  async function uploadSubtitle(event: React.FormEvent) {
+    event.preventDefault();
+    if (!subtitleMediaId || !subtitleFile) return;
+    setBusy('subtitle-upload'); setError(null);
+    try {
+      const form = new FormData();
+      form.append('file', subtitleFile);
+      form.append('language', subtitleLanguage);
+      form.append('forced', String(subtitleForced));
+      setSubtitleTracks(await api.upload<SubtitleTrackInfo[]>(`/media/${subtitleMediaId}/subtitles/upload`, form));
+      setSubtitleFile(null);
+      setResult('Субтитрите са качени и ще бъдат конвертирани при първото пускане.');
+    } catch (err) { setError(errorMessage(err, 'Субтитрите не могат да бъдат качени.')); }
+    finally { setBusy(null); }
+  }
+
+  async function deleteSubtitle(index: number) {
+    if (!subtitleMediaId) return;
+    setBusy(`subtitle-delete:${index}`);
+    try { setSubtitleTracks(await api.delete<SubtitleTrackInfo[]>(`/media/${subtitleMediaId}/subtitles/${index}`)); }
+    catch (err) { setError(errorMessage(err, 'Субтитрите не могат да бъдат изтрити.')); }
+    finally { setBusy(null); }
+  }
+
+  async function editSubtitle(index: number) {
+    if (!subtitleMediaId) return;
+    setBusy(`subtitle-read:${index}`);
+    try {
+      const source = await api.get<{ content: string }>(`/media/${subtitleMediaId}/subtitles/${index}/source`);
+      setSubtitleEditIndex(index); setSubtitleEditContent(source.content);
+    } catch (err) { setError(errorMessage(err, 'Subtitle файлът не може да бъде прочетен.')); }
+    finally { setBusy(null); }
+  }
+
+  async function saveSubtitleEdit() {
+    if (!subtitleMediaId || subtitleEditIndex === null) return;
+    setBusy('subtitle-save');
+    try {
+      await api.patch(`/media/${subtitleMediaId}/subtitles/${subtitleEditIndex}/source`, { content: subtitleEditContent });
+      setSubtitleEditIndex(null); setResult('Корекциите са записани като UTF-8 и кешът е обновен.');
+      await chooseSubtitleMedia(subtitleMediaId);
+    } catch (err) { setError(errorMessage(err, 'Корекциите не могат да бъдат записани.')); }
+    finally { setBusy(null); }
+  }
+
+  async function enqueueAbrLadder() {
+    if (!subtitleMediaId) return;
+    setBusy('abr-ladder'); setError(null);
+    try {
+      const response = await api.post<{ heights: number[] }>(`/transcode/ladder`, {
+        mediaFileId: subtitleMediaId,
+        encoder: 'h264_amf',
+        maxHeight: 1080,
+      });
+      setResult(`ABR стълбицата е добавена в опашката: ${response.heights.map((height) => `${height}p`).join(', ')}.`);
+      await loadAdmin(false);
+    } catch (err) { setError(errorMessage(err, 'ABR стълбицата не може да бъде добавена.')); }
+    finally { setBusy(null); }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -168,7 +263,7 @@ export default function SettingsPage() {
 
     <nav className="settings-nav" aria-label="Секции на настройките">
       <a href="#account">Акаунт</a>
-      {user?.isAdmin && <><a href="#operations">Операции</a><a href="#users">Потребители</a><a href="#jobs">Transcode jobs</a></>}
+      {user?.isAdmin && <><a href="#operations">Операции</a><a href="#admin-center">Администраторски център</a><a href="#subtitles">Субтитри</a><a href="#users">Потребители</a><a href="#jobs">Transcode jobs</a></>}
     </nav>
 
     <div className="settings-feedback" aria-live="polite" aria-atomic="true">
@@ -209,7 +304,39 @@ export default function SettingsPage() {
           <article className="admin-card"><span className="admin-index">02</span><div><h3>Поправка на каталога</h3><p>Показва как parser-ът би пренаредил несвързаните заглавия, без да променя данни.</p></div><button disabled={Boolean(busy)} onClick={() => void run('repair', () => api.post('/media/repair', { dryRun: true }), 'Dry-run проверката приключи.')}>{busy === 'repair' ? 'Проверка…' : 'Прегледай поправките'}</button></article>
           <article className="admin-card"><span className="admin-index">03</span><div><h3>Метаданни</h3><p>Допълва описания, жанрове, рейтинги, постери и backdrop изображения от TMDB.</p></div><button disabled={Boolean(busy)} onClick={() => void run('metadata', () => api.post('/metadata/refresh', {}), 'Липсващите метаданни са обработени.')}>{busy === 'metadata' ? 'Обновяване…' : 'Обнови липсващите'}</button></article>
           <article className="admin-card"><span className="admin-index">04</span><div><h3>Липсващи HLS версии</h3><p>Провери безопасно или добави до 10 несъвместими файла в transcode опашката.</p></div><div className="admin-card-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void run('transcode-check', () => api.post('/transcode/missing', { dryRun: true, limit: 10 }), 'Проверката приключи.')}>{busy === 'transcode-check' ? 'Проверка…' : 'Само провери'}</button><button disabled={Boolean(busy)} onClick={() => { if (window.confirm('Да добавя до 10 файла в transcode опашката?')) void run('transcode-start', () => api.post('/transcode/missing', { dryRun: false, limit: 10 }), 'Файловете са добавени в опашката.'); }}>{busy === 'transcode-start' ? 'Добавяне…' : 'Добави в опашката'}</button></div></article>
+          <article className="admin-card"><span className="admin-index">05</span><div><h3>Проверка на файловете</h3><p>Открива липсващи записи, orphan заглавия и вероятни дубликати. Deep проверката валидира всеки видеофайл с FFprobe.</p></div><div className="admin-card-actions"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void run('media-audit', () => api.post('/media/audit', { deep: false }), 'Проверката на библиотеката приключи.')}>{busy === 'media-audit' ? 'Проверка…' : 'Бърз audit'}</button><button disabled={Boolean(busy)} onClick={() => { if (window.confirm('Deep audit ще прочете всеки видеофайл и може да отнеме дълго време. Да продължа?')) void run('media-deep-audit', () => api.post('/media/audit', { deep: true }), 'Deep integrity проверката приключи.'); }}>{busy === 'media-deep-audit' ? 'Валидиране…' : 'Deep integrity audit'}</button></div></article>
         </div>
+      </section>
+
+      <AdminOpsCenter overview={overview} notify={(message, failed) => { if (failed) { setError(message); setResult(null); } else { setResult(message); setError(null); } }} />
+
+      <section className="settings-section subtitle-admin" id="subtitles">
+        <div className="section-heading"><div><span className="eyebrow">Езици и достъпност</span><h2>Субтитри</h2><p className="muted">Прегледай откритите писти или добави проверен SRT, ASS, SSA или VTT файл.</p></div></div>
+        <div className="subtitle-admin-picker">
+          <label>Заглавие<select value={subtitleTitleId} onChange={(event) => void chooseSubtitleTitle(event.target.value)}><option value="">Избери заглавие</option>{titles.map((title) => <option key={title.id} value={title.id}>{title.name}</option>)}</select></label>
+          <label>Видео файл<select value={subtitleMediaId} disabled={!subtitleMedia} onChange={(event) => void chooseSubtitleMedia(event.target.value)}><option value="">Избери файл</option>{subtitleMedia?.mediaFiles.map((file) => <option key={file.id} value={file.id}>Филм · {file.container ?? 'video'}</option>)}{subtitleMedia?.episodes.flatMap((episode) => episode.mediaFiles.map((file) => <option key={file.id} value={file.id}>С{episode.seasonNumber} Е{episode.episodeNumber} · {episode.name ?? file.container ?? 'video'}</option>))}</select></label>
+        </div>
+        {subtitleMediaId && <div className="subtitle-admin-layout">
+          <div className="subtitle-track-list">
+            <h3>Открити писти <span>{subtitleTracks.length}</span></h3>
+            {subtitleTracks.length === 0 ? <p className="muted">Няма намерени субтитри за този файл.</p> : subtitleTracks.map((track) => <article key={track.index}>
+              <div><strong>{track.language === 'bul' ? 'Български' : track.language ?? 'Неизвестен'}{track.forced ? ' · Forced' : ''}</strong><span>{track.source === 'external' ? track.fileName : `Вградена писта ${track.index}`}</span></div>
+              <span className={`status ${track.convertible ? 'status-done' : 'status-failed'}`}>{track.convertible ? 'Готова' : `Bitmap · ${track.codec}`}</span>
+              {track.encoding && <span className="subtitle-encoding">{track.encoding}</span>}
+              {track.source === 'external' && <div className="subtitle-row-actions"><button type="button" className="job-action" disabled={Boolean(busy)} onClick={() => void editSubtitle(track.index)}>Редактирай</button><button type="button" className="job-action job-action-danger" disabled={Boolean(busy)} onClick={() => void deleteSubtitle(track.index)}>Изтрий</button></div>}
+            </article>)}
+            {subtitleEditIndex !== null && <div className="subtitle-source-editor"><label>Съдържание<textarea value={subtitleEditContent} onChange={(event) => setSubtitleEditContent(event.target.value)} spellCheck={false} rows={16} /></label><div><button type="button" className="secondary-button" onClick={() => setSubtitleEditIndex(null)}>Отказ</button><button type="button" disabled={Boolean(busy)} onClick={() => void saveSubtitleEdit()}>{busy === 'subtitle-save' ? 'Запазване…' : 'Запази корекциите'}</button></div></div>}
+          </div>
+          <form className="subtitle-upload" onSubmit={uploadSubtitle}>
+            <div><h3>Добавяне на файл</h3><p className="muted">Файлът се записва до видеото и се съпоставя автоматично.</p></div>
+            <label>Файл<input type="file" accept=".srt,.ass,.ssa,.vtt" onChange={(event) => setSubtitleFile(event.target.files?.[0] ?? null)} required /></label>
+            <label>Език<select value={subtitleLanguage} onChange={(event) => setSubtitleLanguage(event.target.value)}><option value="bul">Български</option><option value="eng">Английски</option><option value="rus">Руски</option><option value="ell">Гръцки</option></select></label>
+            <label className="subtitle-forced"><input type="checkbox" checked={subtitleForced} onChange={(event) => setSubtitleForced(event.target.checked)} /> Forced писта</label>
+            <button disabled={!subtitleFile || Boolean(busy)}>{busy === 'subtitle-upload' ? 'Качване…' : 'Качи субтитри'}</button>
+            <div className="abr-admin-action"><strong>Адаптивно качество</strong><p>Създава 360p, 480p, 720p и 1080p до реалната височина на източника.</p><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => void enqueueAbrLadder()}>{busy === 'abr-ladder' ? 'Добавяне…' : 'Създай ABR стълбица'}</button></div>
+            {subtitleCapabilities && <div className="bitmap-capability"><strong>PGS/VobSub</strong><span>{subtitleCapabilities.bitmapPlaybackAvailable ? 'Достъпни' : 'Не са достъпни'}</span><p>{subtitleCapabilities.bitmapReason}</p><small>FFmpeg burn-in filter: {subtitleCapabilities.burnInFilterAvailable ? 'наличен' : 'липсва'} · OCR: {subtitleCapabilities.ocrAvailable ? 'наличен' : 'липсва'}</small></div>}
+          </form>
+        </div>}
       </section>
 
       <section className="settings-section" id="users">
@@ -223,6 +350,10 @@ export default function SettingsPage() {
               <button className="secondary-button" disabled={Boolean(busy) || account.id === user.sub} onClick={() => void run(`sessions:${account.id}`, () => api.post(`/auth/users/${account.id}/revoke-sessions`, {}), 'Сесиите на потребителя са прекратени.')}>Прекрати сесиите</button>
             </div>
           </article>)}
+        </div>
+        <div className="active-session-register">
+          <div className="section-heading"><div><h3>Активни входове</h3><p className="muted">Регистър на валидните входове от последните 7 дни. JWT съдържанието не се съхранява.</p></div><span className="section-count">{sessions.length}</span></div>
+          {sessions.length === 0 ? <p className="muted">Няма регистрирани активни входове.</p> : <div className="session-table">{sessions.map((session) => <article key={session.id}><div><strong>{session.user.email}</strong><span>{session.userAgent ?? 'Неизвестно устройство'}</span></div><span>{session.ipAddress ?? 'IP неизвестен'}</span><time dateTime={session.createdAt}>{new Date(session.createdAt).toLocaleString('bg-BG')}</time></article>)}</div>}
         </div>
       </section>
 

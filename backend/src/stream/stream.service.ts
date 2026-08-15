@@ -75,6 +75,54 @@ export class StreamService {
     }));
   }
 
+  async getAdaptiveManifest(mediaFileId: string): Promise<string> {
+    const renditions = await this.listRenditions(mediaFileId);
+    if (renditions.length === 0) throw new NotFoundException('No HLS renditions are available');
+
+    const ordered = [...renditions].sort((a, b) => a.height - b.height);
+    const blocks: string[] = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-INDEPENDENT-SEGMENTS'];
+    let audioAdded = false;
+
+    for (const rendition of ordered) {
+      const masterPath = path.join(this.renditionDir(mediaFileId, rendition.height), MASTER_PLAYLIST);
+      const master = await fs.readFile(masterPath, 'utf8');
+      const lines = master.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+      if (!audioAdded) {
+        for (const line of lines.filter((item) => item.startsWith('#EXT-X-MEDIA:'))) {
+          blocks.push(rewriteManifestUri(line, rendition.height));
+          audioAdded = true;
+        }
+      }
+
+      const streamInfoIndex = lines.findIndex((line) => line.startsWith('#EXT-X-STREAM-INF:'));
+      if (streamInfoIndex < 0 || !lines[streamInfoIndex + 1]) continue;
+      blocks.push(lines[streamInfoIndex]);
+      blocks.push(`../${rendition.height}/stream_0.m3u8`);
+    }
+
+    if (!blocks.some((line) => line.startsWith('#EXT-X-STREAM-INF:'))) {
+      throw new NotFoundException('No valid HLS video variants are available');
+    }
+    return `${blocks.join('\n')}\n`;
+  }
+
+  async getPreviewInfo(mediaFileId: string) {
+    await this.assertMediaFile(mediaFileId);
+    const metadataPath = path.join(this.previewDir(mediaFileId), 'metadata.json');
+    if (!(await exists(metadataPath))) return null;
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as { intervalSec: number; frames: number; width: number };
+    return { ...metadata, urlTemplate: `/stream/${mediaFileId}/preview/thumb_{index}.jpg` };
+  }
+
+  async getPreviewFile(mediaFileId: string, file: string): Promise<string> {
+    await this.assertMediaFile(mediaFileId);
+    if (!/^thumb_\d{5}\.jpg$/.test(file)) throw new BadRequestException('Invalid preview filename');
+    const filePath = path.join(this.previewDir(mediaFileId), file);
+    if (!(await exists(filePath))) throw new NotFoundException('Preview frame not found');
+    return filePath;
+  }
+
   /**
    * Resolves one file inside a rendition: the entry playlist, a variant
    * playlist, or a segment.
@@ -143,7 +191,9 @@ export class StreamService {
     const renditions = await this.listRenditions(mediaFileId);
     return {
       mode: renditions.length > 0 ? 'hls' : 'unavailable',
-      url: renditions[0]?.playlistUrl ?? null,
+      url: renditions.length > 1
+        ? `/stream/${mediaFileId}/adaptive/master.m3u8`
+        : renditions[0]?.playlistUrl ?? null,
       reason: `Needs transcode: ${blockers.join(', ')}`,
     };
   }
@@ -179,6 +229,23 @@ export class StreamService {
     const outputRoot = this.config.get<string>('transcode.outputRoot')!;
     return path.join(outputRoot, mediaFileId, `${height}p`);
   }
+
+  private previewDir(mediaFileId: string): string {
+    if (!/^[0-9a-fA-F-]{36}$/.test(mediaFileId)) throw new BadRequestException('Invalid media file id');
+    return path.join(this.config.get<string>('transcode.outputRoot')!, mediaFileId, 'preview');
+  }
+
+  private async assertMediaFile(mediaFileId: string) {
+    const mediaFile = await this.prisma.mediaFile.findUnique({ where: { id: mediaFileId }, select: { id: true } });
+    if (!mediaFile) throw new NotFoundException(`Media file ${mediaFileId} not found`);
+  }
+}
+
+function rewriteManifestUri(line: string, height: number): string {
+  return line.replace(/URI="([^"]+)"/, (_match, uri: string) => {
+    if (!/^stream_\d{1,2}\.m3u8$/.test(uri)) throw new BadRequestException('Unsafe HLS audio playlist');
+    return `URI="../${height}/${uri}"`;
+  });
 }
 
 async function exists(filePath: string): Promise<boolean> {

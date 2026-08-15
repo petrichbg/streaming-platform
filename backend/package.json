@@ -12,6 +12,9 @@
     "prisma:migrate": "prisma migrate dev",
     "test:security": "node ../scripts/check-security.mjs",
     "test:integration": "powershell -ExecutionPolicy Bypass -File ../scripts/integration-test.ps1"
+    ,"test:unit": "vitest run"
+    ,"test": "npm run test:unit"
+    ,"typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.5",
@@ -28,15 +31,16 @@
     "rxjs": "^7.8.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^11.0.24",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
-    "@eslint/js": "^10.0.1",
     "eslint": "^10.8.1",
     "globals": "^17.11.0",
     "prisma": "^5.19.0",
     "typescript": "^5.5.0",
-    "typescript-eslint": "^8.67.0"
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
   }
 }

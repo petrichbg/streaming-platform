@@ -21,6 +21,11 @@ scripts/gpu-test/gpu-test-results.csv
 *.vtt
 # Screenshots and traces from driving the app with Playwright
 .playwright-mcp/
+.claude/
+
+# Local scratch/reference files that are not application assets
+New Text Document.txt
+Codex Image*.png
 
 # Runtime state and production logs
 var/

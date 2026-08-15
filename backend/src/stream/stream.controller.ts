@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Header,
   Param,
   Req,
   Res,
@@ -68,6 +69,34 @@ export class StreamController {
   async getPlaybackPlan(@Req() req: any, @Param('mediaFileId') mediaFileId: string) {
     await this.access.assertMediaFileAllowed(req.user, mediaFileId);
     return this.stream.getPlaybackPlan(mediaFileId);
+  }
+
+  @Get(':mediaFileId/adaptive/master.m3u8')
+  @Header('Content-Type', 'application/vnd.apple.mpegurl')
+  @Header('Cache-Control', 'no-cache')
+  async getAdaptiveManifest(@Req() req: any, @Param('mediaFileId') mediaFileId: string) {
+    await this.access.assertMediaFileAllowed(req.user, mediaFileId);
+    return this.stream.getAdaptiveManifest(mediaFileId);
+  }
+
+  @Get(':mediaFileId/preview')
+  async getPreviewInfo(@Req() req: any, @Param('mediaFileId') mediaFileId: string) {
+    await this.access.assertMediaFileAllowed(req.user, mediaFileId);
+    return this.stream.getPreviewInfo(mediaFileId);
+  }
+
+  @Get(':mediaFileId/preview/:file')
+  async getPreviewFile(
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+    @Param('mediaFileId') mediaFileId: string,
+    @Param('file') file: string,
+  ) {
+    await this.access.assertMediaFileAllowed(req.user, mediaFileId);
+    const filePath = await this.stream.getPreviewFile(mediaFileId, file);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return streamFile(filePath);
   }
 
   /**

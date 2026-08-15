@@ -7,6 +7,19 @@ $newPassword = 'Integration#2609'
 $token = $null
 $profileId = $null
 $passed = 0
+$rootEnv = Join-Path $PSScriptRoot '..\.env'
+$config = @{}
+Get-Content $rootEnv | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*=' } | ForEach-Object { $key, $value = $_ -split '=', 2; $config[$key] = $value }
+$pgTitleId = '10000000-0000-0000-0000-000000000001'
+$rTitleId = '10000000-0000-0000-0000-000000000002'
+$directMediaId = '20000000-0000-0000-0000-000000000001'
+$hlsMediaId = '20000000-0000-0000-0000-000000000002'
+$hlsJobId = '30000000-0000-0000-0000-000000000001'
+
+function Invoke-TestSql([string]$Sql) {
+  $Sql | docker exec -i streaming-postgres psql -v ON_ERROR_STOP=1 -U $config.POSTGRES_USER -d $config.POSTGRES_DB | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Test fixture SQL failed' }
+}
 
 function Invoke-TestRequest {
   param([string]$Method, [string]$Path, $Body = $null, [string]$Bearer = '')
@@ -31,6 +44,16 @@ function Assert-Status([string]$Name, $Response, [int]$Expected) {
 }
 
 try {
+  Invoke-TestSql @"
+INSERT INTO "Title" (id,type,name,"releaseYear",rating,genres,"createdAt","updatedAt","cast") VALUES
+('$pgTitleId','MOVIE','Integration PG',2024,'PG-13',ARRAY['Test'],NOW(),NOW(),ARRAY[]::TEXT[]),
+('$rTitleId','MOVIE','Integration R',2024,'R',ARRAY['Test'],NOW(),NOW(),ARRAY[]::TEXT[]) ON CONFLICT (id) DO NOTHING;
+INSERT INTO "MediaFile" (id,"titleId","sourcePath",container,"videoCodec","audioTracks","subtitleTracks","durationSec","importedAt") VALUES
+('$directMediaId','$pgTitleId','integration/direct.mp4','mp4','h264','[{"codec":"aac","language":"eng"}]'::jsonb,'[]'::jsonb,120,NOW()),
+('$hlsMediaId','$rTitleId','integration/hls.mkv','mkv','hevc','[{"codec":"dts","language":"eng"}]'::jsonb,'[]'::jsonb,120,NOW()) ON CONFLICT (id) DO NOTHING;
+INSERT INTO "TranscodeJob" (id,"mediaFileId",encoder,"targetHeight",status,"outputPath","createdAt","finishedAt",attempt)
+VALUES ('$hlsJobId','$hlsMediaId','libx264',720,'DONE','fixture',NOW(),NOW(),1) ON CONFLICT (id) DO NOTHING;
+"@
   Assert-Status 'health is public' (Invoke-TestRequest GET '/health') 200
   Assert-Status 'account endpoint rejects anonymous requests' (Invoke-TestRequest GET '/auth/me') 401
 
@@ -42,7 +65,7 @@ try {
   Assert-Status 'non-admin cannot list users' (Invoke-TestRequest GET '/auth/users' $null $token) 403
   Assert-Status 'non-admin cannot read admin overview' (Invoke-TestRequest GET '/admin/overview' $null $token) 403
 
-  $profile = Invoke-TestRequest POST '/profiles' @{ name = 'Integration'; isKid = $false } $token
+  $profile = Invoke-TestRequest POST '/profiles' @{ name = 'Integration'; isKid = $true; maxRating = 'PG-13' } $token
   Assert-Status 'create profile' $profile 201
   $profileId = $profile.Body.id
   Assert-Status 'set profile PIN' (Invoke-TestRequest POST "/profiles/$profileId/pin" @{ pin = '2608' } $token) 201
@@ -54,6 +77,20 @@ try {
 
   $catalog = Invoke-TestRequest GET "/titles?profileId=$profileId" $null $profileToken
   Assert-Status 'profile catalog access' $catalog 200
+  if (-not ($catalog.Body | Where-Object { $_.id -eq $pgTitleId })) { throw 'FAIL parental control: PG-13 title was hidden' }
+  if ($catalog.Body | Where-Object { $_.id -eq $rTitleId }) { throw 'FAIL parental control: R title was visible' }
+  $passed += 2
+  Write-Output 'PASS parental control allows title at cap'
+  Write-Output 'PASS parental control hides title above cap'
+  $directPlan = Invoke-TestRequest GET "/stream/$directMediaId/playback" $null $profileToken
+  Assert-Status 'direct playback plan endpoint' $directPlan 200
+  if ($directPlan.Body.mode -ne 'direct') { throw "FAIL direct regression: got $($directPlan.Body.mode)" }
+  $passed++; Write-Output 'PASS direct playback regression'
+  $hlsPlan = Invoke-TestRequest GET "/stream/$hlsMediaId/playback" $null $token
+  Assert-Status 'HLS playback plan endpoint' $hlsPlan 200
+  if ($hlsPlan.Body.mode -ne 'hls' -or $hlsPlan.Body.url -notmatch '/720/') { throw "FAIL HLS regression: $($hlsPlan.Body | ConvertTo-Json -Compress)" }
+  $passed++; Write-Output 'PASS HLS playback regression'
+  Assert-Status 'parental control blocks HLS playback above cap' (Invoke-TestRequest GET "/stream/$hlsMediaId/playback" $null $profileToken) 404
   if ($catalog.Body.Count -gt 0) {
     $titleId = $catalog.Body[0].id
     Assert-Status 'add watchlist item' (Invoke-TestRequest POST "/profiles/$profileId/watchlist" @{ titleId = $titleId } $profileToken) 201
@@ -71,16 +108,16 @@ try {
   Assert-Status 'revoked token no longer works' (Invoke-TestRequest GET '/auth/me' $null $newToken) 401
   Write-Output "Integration suite passed: $passed checks"
 } finally {
-  $rootEnv = Join-Path $PSScriptRoot '..\.env'
-  $config = @{}
-  Get-Content $rootEnv | Where-Object { $_ -match '^[A-Z][A-Z0-9_]*=' } | ForEach-Object { $key, $value = $_ -split '=', 2; $config[$key] = $value }
   $cleanup = @"
 BEGIN;
 DELETE FROM "WatchlistItem" WHERE "profileId" IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email='$email'));
 DELETE FROM "WatchProgress" WHERE "profileId" IN (SELECT id FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email='$email'));
 DELETE FROM "Profile" WHERE "userId" IN (SELECT id FROM "User" WHERE email='$email');
 DELETE FROM "User" WHERE email='$email';
+DELETE FROM "TranscodeJob" WHERE id='$hlsJobId';
+DELETE FROM "MediaFile" WHERE id IN ('$directMediaId','$hlsMediaId');
+DELETE FROM "Title" WHERE id IN ('$pgTitleId','$rTitleId');
 COMMIT;
 "@
-  $cleanup | docker exec -i streaming-postgres psql -v ON_ERROR_STOP=1 -U $config.POSTGRES_USER -d $config.POSTGRES_DB | Out-Null
+  Invoke-TestSql $cleanup
 }

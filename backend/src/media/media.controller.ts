@@ -35,6 +35,10 @@ export class MediaController {
     return this.scanner.repair(body?.dryRun !== false);
   }
 
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('audit')
+  audit(@Body() body: { deep?: boolean }) { return this.scanner.audit(body?.deep === true); }
+
   /**
    * The player only knows a mediaFileId, but watch progress is keyed on
    * titleId/episodeId, so it needs this lookup to know what it is playing.

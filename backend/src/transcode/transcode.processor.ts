@@ -3,6 +3,7 @@ import { Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import { execFile } from 'child_process';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 import { FfprobeService } from '../media/ffprobe.service';
@@ -83,6 +84,9 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
       await this.prisma.transcodeJob.update({
         where: { id: transcodeJobId },
         data: { status: 'DONE', finishedAt: new Date(), outputPath, error: null },
+      });
+      await this.ensureTimelinePreview(mediaFileId).catch((error) => {
+        this.logger.warn(`Timeline preview generation skipped for ${mediaFileId}: ${(error as Error).message}`);
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -253,6 +257,53 @@ export class TranscodeProcessor extends WorkerHost implements OnModuleInit {
     }
     return true;
   }
+
+  private async ensureTimelinePreview(mediaFileId: string): Promise<void> {
+    const outputRoot = this.config.get<string>('transcode.outputRoot')!;
+    const mediaRoot = this.config.get<string>('media.root')!;
+    if (typeof outputRoot !== 'string' || typeof mediaRoot !== 'string') return;
+    const mediaDir = path.join(outputRoot, mediaFileId);
+    const previewDir = path.join(mediaDir, 'preview');
+    const metadataPath = path.join(previewDir, 'metadata.json');
+    try { await fs.access(metadataPath); return; } catch { /* generate */ }
+
+    await fs.mkdir(mediaDir, { recursive: true });
+    const lockPath = path.join(mediaDir, '.preview.lock');
+    let lock: Awaited<ReturnType<typeof fs.open>>;
+    try { lock = await fs.open(lockPath, 'wx'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+      throw error;
+    }
+
+    const workDir = path.join(mediaDir, `preview.work-${Date.now()}`);
+    try {
+      const mediaFile = await this.prisma.mediaFile.findUniqueOrThrow({ where: { id: mediaFileId } });
+      const sourcePath = path.join(mediaRoot, mediaFile.sourcePath);
+      await fs.mkdir(workDir, { recursive: true });
+      await execFilePromise('ffmpeg', [
+        '-y', '-i', sourcePath, '-vf', 'fps=1/30,scale=320:-2', '-q:v', '4',
+        path.join(workDir, 'thumb_%05d.jpg'),
+      ]);
+      const frames = (await fs.readdir(workDir)).filter((name) => /^thumb_\d{5}\.jpg$/.test(name)).length;
+      if (frames === 0) throw new Error('ffmpeg produced no preview frames');
+      await fs.writeFile(path.join(workDir, 'metadata.json'), JSON.stringify({ intervalSec: 30, frames, width: 320 }));
+      await fs.rm(previewDir, { recursive: true, force: true });
+      await fs.rename(workDir, previewDir);
+    } finally {
+      await lock.close();
+      await fs.rm(lockPath, { force: true });
+      await fs.rm(workDir, { recursive: true, force: true });
+    }
+  }
+}
+
+function execFilePromise(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { maxBuffer: 20 * 1024 * 1024 }, (error, _stdout, stderr) => {
+      if (error) reject(new Error(stderr.trim().split(/\r?\n/).slice(-8).join('\n') || error.message));
+      else resolve();
+    });
+  });
 }
 
 function isAmfFailure(message: string): boolean {

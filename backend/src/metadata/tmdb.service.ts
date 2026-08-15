@@ -15,6 +15,18 @@ export interface TmdbMatch {
   posterPath: string | null;
   backdropPath: string | null;
   genres: string[];
+  cast: string[];
+  director: string | null;
+  trailerKey: string | null;
+}
+
+interface EditorialData {
+  credits?: {
+    cast?: Array<{ name: string; order?: number }>;
+    crew?: Array<{ name: string; job?: string }>;
+  };
+  videos?: { results?: Array<{ key: string; site: string; type: string; official?: boolean }> };
+  created_by?: Array<{ name: string }>;
 }
 
 interface SearchResult {
@@ -51,6 +63,7 @@ export class TmdbService {
     const hit = data?.results?.[0];
     if (!hit) return null;
 
+    const editorial = await this.fetchEditorial('movie', hit.id);
     return {
       tmdbId: hit.id,
       name: hit.title ?? name,
@@ -59,6 +72,7 @@ export class TmdbService {
       posterPath: hit.poster_path ?? null,
       backdropPath: hit.backdrop_path ?? null,
       genres: await this.fetchGenres('movie', hit.id),
+      ...editorial,
     };
   }
 
@@ -69,6 +83,7 @@ export class TmdbService {
     const hit = data?.results?.[0];
     if (!hit) return null;
 
+    const editorial = await this.fetchEditorial('tv', hit.id);
     return {
       tmdbId: hit.id,
       name: hit.name ?? name,
@@ -77,7 +92,23 @@ export class TmdbService {
       posterPath: hit.poster_path ?? null,
       backdropPath: hit.backdrop_path ?? null,
       genres: await this.fetchGenres('tv', hit.id),
+      ...editorial,
     };
+  }
+
+  private async fetchEditorial(kind: 'movie' | 'tv', tmdbId: number) {
+    const params = new URLSearchParams({ append_to_response: 'credits,videos' });
+    const data = await this.get<EditorialData>(`/${kind}/${tmdbId}`, params);
+    const cast = [...(data?.credits?.cast ?? [])]
+      .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+      .slice(0, 10)
+      .map((person) => person.name);
+    const director = data?.credits?.crew?.find((person) => person.job === 'Director')?.name
+      ?? data?.created_by?.[0]?.name
+      ?? null;
+    const videos = (data?.videos?.results ?? []).filter((video) => video.site === 'YouTube' && video.type === 'Trailer');
+    const trailerKey = videos.find((video) => video.official)?.key ?? videos[0]?.key ?? null;
+    return { cast, director, trailerKey };
   }
 
   /**

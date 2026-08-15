@@ -104,6 +104,17 @@ foreach ($disk in @(
   Add-Check $checks $disk.Name ($freeGB -ge $disk.MinGB -and $freePercent -ge $disk.MinPercent) "free=${freeGB}GB (${freePercent}%)"
 }
 
+$backupRoot = if ($rootEnv.BACKUP_ROOT) { $rootEnv.BACKUP_ROOT } else { 'G:\My Drive\StreamingPlatformBackups' }
+try {
+  $latestBackup = Get-ChildItem -LiteralPath $backupRoot -Filter 'streaming-backup-*.7z' -File |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $latestBackup) { Add-Check $checks 'backup_freshness' $false 'no backup archive found' }
+  else {
+    $ageHours = [Math]::Round(((Get-Date) - $latestBackup.LastWriteTime).TotalHours, 1)
+    Add-Check $checks 'backup_freshness' ($ageHours -le 30 -and $latestBackup.Length -gt 0) "$($latestBackup.Name), age=${ageHours}h, size=$($latestBackup.Length)"
+  }
+} catch { Add-Check $checks 'backup_freshness' $false $_.Exception.Message }
+
 $auditSince = (Get-Date).ToUniversalTime().AddMinutes(-2 * $IntervalMinutes)
 $auditCounts = @{ login_failed = 0; playback_failed = 0; transcode_failed = 0 }
 Get-ChildItem -LiteralPath (Join-Path $projectRoot 'var\logs') -Filter 'backend-*.std*.log' -File -ErrorAction SilentlyContinue |

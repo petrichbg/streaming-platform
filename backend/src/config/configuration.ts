@@ -11,6 +11,7 @@ export default () => ({
 
   media: {
     root: process.env.MEDIA_ROOT ?? 'D:/media',
+    watchIntervalMs: parseInt(process.env.MEDIA_WATCH_INTERVAL_MS ?? '60000', 10),
   },
 
   tmdb: {

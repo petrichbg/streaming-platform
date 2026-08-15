@@ -15,6 +15,34 @@ model User {
   sessionVersion Int     @default(0)
   createdAt    DateTime  @default(now())
   profiles     Profile[]
+  loginSessions LoginSession[]
+}
+
+model LoginSession {
+  id        String    @id @default(uuid())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  userAgent String?
+  ipAddress String?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  @@index([userId, revokedAt, expiresAt])
+}
+
+model DevicePairing {
+  id         String    @id @default(uuid())
+  code       String    @unique
+  secretHash String
+  userId     String?
+  deviceName String?
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  claimedAt  DateTime?
+  consumedAt DateTime?
+
+  @@index([expiresAt, consumedAt])
 }
 
 model Profile {
@@ -48,6 +76,10 @@ model Title {
   genres        String[]
   posterPath    String?
   backdropPath  String?
+  tmdbId        Int?
+  cast          String[]        @default([])
+  director      String?
+  trailerKey    String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   episodes      Episode[]
@@ -68,6 +100,7 @@ model Episode {
   episodeNumber Int
   name          String?
   overview      String?
+  stillPath     String?
   mediaFiles    MediaFile[]
   watchProgress WatchProgress[]
 

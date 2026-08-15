@@ -33,6 +33,16 @@ export class TranscodeController {
     return this.queue.enqueue(this.queue.validate(body));
   }
 
+  @Post('ladder')
+  async enqueueLadder(@Body() body: { mediaFileId?: string; encoder?: string; maxHeight?: number }) {
+    if (!body.mediaFileId) throw new BadRequestException('mediaFileId is required');
+    const encoder = (body.encoder ?? 'h264_amf') as AmfEncoder;
+    if (!AMF_ENCODERS.includes(encoder)) {
+      throw new BadRequestException(`encoder must be one of: ${AMF_ENCODERS.join(', ')}`);
+    }
+    return this.queue.enqueueLadder(body.mediaFileId, encoder, body.maxHeight ?? 1080);
+  }
+
   @Post('jobs/:jobId/cancel')
   cancel(@Param('jobId') jobId: string) {
     return this.queue.cancel(jobId);

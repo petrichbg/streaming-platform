@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
@@ -39,6 +39,8 @@ export interface BulkCandidate {
   reason: string;
 }
 
+const ABR_HEIGHTS = [360, 480, 720, 1080] as const;
+
 // A row claiming to be in flight while the queue holds no such job is only
 // retired once it is this old. The processor removes the job from the queue
 // slightly before it writes DONE to the database, and marking a row failed
@@ -47,7 +49,7 @@ export interface BulkCandidate {
 const ABANDONED_AFTER_MS = 60_000;
 
 @Injectable()
-export class TranscodeQueueService {
+export class TranscodeQueueService implements OnModuleInit {
   private readonly logger = new Logger(TranscodeQueueService.name);
 
   constructor(
@@ -58,6 +60,18 @@ export class TranscodeQueueService {
     private readonly processor: TranscodeProcessor,
     private readonly cleanup: HlsCleanupService,
   ) {}
+
+  async onModuleInit() {
+    const interrupted = await this.prisma.transcodeJob.findMany({ where: { status: { in: ['QUEUED', 'RUNNING'] } } });
+    for (const job of interrupted) {
+      const key = renditionKey(job.mediaFileId, job.targetHeight);
+      if (await this.queue.getJob(key)) continue;
+      this.logger.warn(`Recovering interrupted transcode ${job.id} (${key})`);
+      await this.cleanup.discardWork(job.mediaFileId, job.targetHeight, job.id);
+      await this.prisma.transcodeJob.update({ where: { id: job.id }, data: { status: 'QUEUED', startedAt: null, finishedAt: null, attempt: { increment: 1 }, error: 'Recovered after service restart' } });
+      await this.queue.add('transcode', { mediaFileId: job.mediaFileId, encoder: job.encoder as TranscodeJobData['encoder'], targetHeight: job.targetHeight, transcodeJobId: job.id, attempt: job.attempt + 1, fallbackFrom: job.fallbackFrom as TranscodeJobData['fallbackFrom'] }, { jobId: key, attempts: 1, removeOnComplete: true, removeOnFail: false });
+    }
+  }
 
   listRecentJobs() {
     return this.prisma.transcodeJob.findMany({
@@ -139,6 +153,26 @@ export class TranscodeQueueService {
       jobs: queued,
       dryRun: false,
     };
+  }
+
+  async enqueueLadder(mediaFileId: string, encoder: AmfEncoder, maxHeight = 1080) {
+    if (!AMF_ENCODERS.includes(encoder)) throw new BadRequestException('Unsupported AMF encoder');
+    if (!ABR_HEIGHTS.includes(maxHeight as (typeof ABR_HEIGHTS)[number])) {
+      throw new BadRequestException(`maxHeight must be one of: ${ABR_HEIGHTS.join(', ')}`);
+    }
+    const mediaFile = await this.prisma.mediaFile.findUnique({ where: { id: mediaFileId } });
+    if (!mediaFile) throw new NotFoundException(`Media file ${mediaFileId} not found`);
+
+    const mediaRoot = this.config.get<string>('media.root')!;
+    const sourceCeiling = await this.renditionHeightFor(path.join(mediaRoot, mediaFile.sourcePath), maxHeight);
+    const heights = ABR_HEIGHTS.filter((height) => height <= sourceCeiling);
+    if (heights.length === 0) heights.push(360);
+
+    const jobs = [];
+    for (const targetHeight of heights) {
+      jobs.push(await this.enqueue({ mediaFileId, encoder, targetHeight }));
+    }
+    return { mediaFileId, heights, jobs: jobs.map((job) => ({ id: job.id, height: job.targetHeight, status: job.status })) };
   }
 
   /**

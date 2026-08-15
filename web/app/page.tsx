@@ -33,6 +33,8 @@ export default function BrowsePage() {
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'MOVIE' | 'SERIES'>('ALL');
   const [genreFilter, setGenreFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'POPULAR' | 'NEWEST' | 'YEAR' | 'TITLE'>('POPULAR');
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [searching, setSearching] = useState(false);
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingEntry[]>([]);
   const [featuredDetail, setFeaturedDetail] = useState<TitleDetail | null>(null);
@@ -57,6 +59,14 @@ export default function BrowsePage() {
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setRefreshNonce((value) => value + 1);
+    const timer = window.setInterval(refresh, 60_000);
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); };
   }, []);
 
   // Profiles load once; the catalog below re-fetches whenever the choice
@@ -176,7 +186,7 @@ export default function BrowsePage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, profileId, router]);
+  }, [query, profileId, router, refreshNonce]);
 
   useEffect(() => {
     if (!profileId) {
@@ -207,7 +217,15 @@ export default function BrowsePage() {
     (typeFilter === 'ALL' || title.type === typeFilter) &&
     (!genreFilter || title.genres.includes(genreFilter)) &&
     (!yearFilter || title.releaseYear === Number(yearFilter)),
-  );
+  ).sort((a, b) => {
+    if (sortBy === 'NEWEST') return b.createdAt.localeCompare(a.createdAt);
+    if (sortBy === 'YEAR') return (b.releaseYear ?? 0) - (a.releaseYear ?? 0);
+    if (sortBy === 'TITLE') return a.name.localeCompare(b.name, 'bg');
+    return b.popularity - a.popularity || b.createdAt.localeCompare(a.createdAt);
+  });
+  const recentTitles = useMemo(() => [...(titles ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 12), [titles]);
+  const seriesTitles = useMemo(() => (titles ?? []).filter((title) => title.type === 'SERIES').sort((a, b) => b.popularity - a.popularity).slice(0, 12), [titles]);
+  const genreShelves = useMemo(() => genres.slice(0, 3).map((genre) => ({ genre, items: (titles ?? []).filter((title) => title.genres.includes(genre)).slice(0, 12) })).filter((shelf) => shelf.items.length >= 2), [genres, titles]);
   const featuredTitles = useMemo(
     () => [...(titles ?? [])]
       .filter((title) => title.backdropPath)
@@ -418,6 +436,12 @@ export default function BrowsePage() {
         </section>
       )}
 
+      {!term && titles && <>
+        <CatalogShelf title="Наскоро добавени" items={recentTitles} profileId={profileId} />
+        {seriesTitles.length > 0 && <CatalogShelf title="Сериали" items={seriesTitles} profileId={profileId} />}
+        {genreShelves.map((shelf) => <CatalogShelf key={shelf.genre} title={shelf.genre} items={shelf.items} profileId={profileId} />)}
+      </>}
+
       <section className="catalog-heading">
         <h2>{term ? `Резултати за „${term}“` : 'Популярни в библиотеката'}</h2>
       </section>
@@ -428,6 +452,7 @@ export default function BrowsePage() {
         </div>
         <select className="form-select form-select-sm" aria-label="Жанр" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}><option value="">Всички жанрове</option>{genres.map((genre) => <option key={genre}>{genre}</option>)}</select>
         <select className="form-select form-select-sm" aria-label="Година" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="">Всички години</option>{years.map((year) => <option key={year}>{year}</option>)}</select>
+        <select className="form-select form-select-sm" aria-label="Сортиране" value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)}><option value="POPULAR">Най-популярни</option><option value="NEWEST">Наскоро добавени</option><option value="YEAR">По година</option><option value="TITLE">По заглавие</option></select>
         {(typeFilter !== 'ALL' || genreFilter || yearFilter) && <button className="clear-filters" onClick={() => {setTypeFilter('ALL');setGenreFilter('');setYearFilter('');}}>Изчисти</button>}
       </div>
 
@@ -465,6 +490,13 @@ export default function BrowsePage() {
       </div>
     </main>
   );
+}
+
+function CatalogShelf({ title, items, profileId }: { title: string; items: TitleListItem[]; profileId: string | null }) {
+  return <section className="catalog-shelf" aria-label={title}>
+    <div className="section-heading inline-heading"><h2>{title}</h2><span aria-hidden="true">›</span></div>
+    <div className="catalog-shelf-row">{items.map((item) => <TitleCard key={item.id} title={item} profileId={profileId} />)}</div>
+  </section>;
 }
 
 function HeroSkeleton() {

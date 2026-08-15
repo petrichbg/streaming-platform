@@ -15,15 +15,15 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
-  register(@Body() body: CredentialsBody) {
+  register(@Req() req: any, @Body() body: CredentialsBody) {
     const { email, password } = validateCredentials(body);
-    return this.auth.register(email, password);
+    return this.auth.register(email, password, sessionContext(req));
   }
 
   @Post('login')
-  login(@Body() body: CredentialsBody) {
+  login(@Req() req: any, @Body() body: CredentialsBody) {
     const { email, password } = validateCredentials(body);
-    return this.auth.login(email, password);
+    return this.auth.login(email, password, sessionContext(req));
   }
 
   @UseGuards(JwtAuthGuard)
@@ -54,6 +54,10 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get('sessions')
+  sessions() { return this.auth.listSessions(); }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch('users/:userId/role')
   updateRole(
     @Req() req: any,
@@ -71,6 +75,10 @@ export class AuthController {
   revokeUserSessions(@Param('userId') userId: string) {
     return this.auth.revokeSessions(userId);
   }
+}
+
+function sessionContext(req: any) {
+  return { userAgent: String(req.headers?.['user-agent'] ?? '').slice(0, 300) || null, ipAddress: String(req.ip ?? req.socket?.remoteAddress ?? '').slice(0, 80) || null };
 }
 
 function validateCredentials(body: CredentialsBody): { email: string; password: string } {
